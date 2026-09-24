@@ -118,13 +118,17 @@ custom_components/wallecube_ble/
 ├── __init__.py            # HA integration entry point
 ├── config_flow.py         # Discovery and options flows
 ├── binary_sensor.py       # Status flag entities
+├── number.py              # Numeric settings
+├── select.py              # Option settings
 ├── sensor.py              # Measurement entities
+├── switch.py              # On/off settings
 ├── translations/          # User-facing strings
 └── wclib/                 # Home Assistant-independent device library
     ├── devices/           # One module per device model
     ├── model/             # Fixed-width binary message definitions
     ├── props/             # Field descriptors and transforms
     ├── connection.py      # BLE connection, session and state machine
+    ├── controls.py        # Setting declarations for the control platforms
     └── encryption.py      # Session key derivation and cipher
 docs/
 └── ble-protocol.md        # Protocol reference

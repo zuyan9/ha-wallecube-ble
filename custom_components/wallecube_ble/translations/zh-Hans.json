@@ -1,0 +1,287 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "abort": {
+      "already_configured": "设备已配置",
+      "not_supported": "不支持此设备",
+      "no_devices_found": "未找到未配置的 WalleCube 设备"
+    },
+    "error": {
+      "unknown": "发生意外错误，请查看日志了解详情",
+      "bt_timeout": "无法连接设备：连接超时",
+      "bt_not_found": "未找到设备。如果此错误反复出现，请尝试刷新蓝牙集成",
+      "bt_general_error": "无法连接设备，详情请查看日志",
+      "session_key_failed": "已连接，但无法与设备建立加密会话",
+      "unsupported_protocol": "设备未提供预期的蓝牙特征，可能运行着不受支持的固件",
+      "error_try_refresh": "会话建立前设备已断开，请重试"
+    },
+    "step": {
+      "bluetooth_confirm": {
+        "title": "配置已发现的设备",
+        "description": "设置 {name}？",
+        "data": {
+          "update_period": "更新周期"
+        },
+        "data_description": {
+          "update_period": "处理下一次设备更新前等待的秒数。0 表示立即处理所有更新（会导致大量数据库写入）。"
+        },
+        "sections": {
+          "log_options": {
+            "name": "日志选项",
+            "description": "详细日志选项。其中大多数会大量写入日志，请勿长时间开启。",
+            "data": {
+              "log_masked": "隐藏敏感信息（公开分享日志时有用）",
+              "log_connection": "记录设备连接详情",
+              "log_messages": "记录解码后的遥测消息",
+              "log_packets": "记录原始遥测帧",
+              "log_encrypted_payloads": "记录加密数据",
+              "log_payloads": "记录解密数据",
+              "log_bleak": "启用 bleak 调试日志级别（不隐藏敏感信息，也不限于此设备）"
+            }
+          },
+          "advanced_connection_options": {
+            "name": "高级连接选项",
+            "description": "这些选项影响蓝牙连接行为，仅在遇到连接问题时更改。",
+            "data": {
+              "connection_timeout": "连接超时",
+              "bluez_start_notify": "使用 BlueZ start notify"
+            },
+            "data_description": {
+              "connection_timeout": "等待设备连接并建立会话的秒数。",
+              "bluez_start_notify": "如果连接多个 BLE 设备时频繁断开，或日志中出现 `AcquireNotify: Read error` / `Unexpected EOF on notification file handle`，请尝试启用此项。"
+            }
+          }
+        }
+      },
+      "user": {
+        "title": "选择 WalleCube 设备",
+        "data": {
+          "address": "BLE 设备"
+        }
+      },
+      "device_confirm": {
+        "title": "设备配置",
+        "description": "设置 {name}？",
+        "data": {
+          "update_period": "更新周期"
+        },
+        "data_description": {
+          "update_period": "处理下一次设备更新前等待的秒数。0 表示立即处理所有更新（会导致大量数据库写入）。"
+        },
+        "sections": {
+          "log_options": {
+            "name": "日志选项",
+            "description": "详细日志选项。其中大多数会大量写入日志，请勿长时间开启。",
+            "data": {
+              "log_masked": "隐藏敏感信息（公开分享日志时有用）",
+              "log_connection": "记录设备连接详情",
+              "log_messages": "记录解码后的遥测消息",
+              "log_packets": "记录原始遥测帧",
+              "log_encrypted_payloads": "记录加密数据",
+              "log_payloads": "记录解密数据",
+              "log_bleak": "启用 bleak 调试日志级别（不隐藏敏感信息，也不限于此设备）"
+            }
+          },
+          "advanced_connection_options": {
+            "name": "高级连接选项",
+            "description": "这些选项影响蓝牙连接行为，仅在遇到连接问题时更改。",
+            "data": {
+              "connection_timeout": "连接超时",
+              "bluez_start_notify": "使用 BlueZ start notify"
+            },
+            "data_description": {
+              "connection_timeout": "等待设备连接并建立会话的秒数。",
+              "bluez_start_notify": "如果连接多个 BLE 设备时频繁断开，或日志中出现 `AcquireNotify: Read error` / `Unexpected EOF on notification file handle`，请尝试启用此项。"
+            }
+          }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "{device_name} 的选项",
+        "data": {
+          "update_period": "更新周期"
+        },
+        "data_description": {
+          "update_period": "处理下一次设备更新前等待的秒数。0 表示立即处理所有更新（会导致大量数据库写入）。"
+        },
+        "sections": {
+          "diagnostics_options": {
+            "name": "诊断",
+            "description": "配置诊断数据收集。",
+            "data": {
+              "collect_packets": "启用数据包收集",
+              "collect_packets_amount": "保存的数据包数量"
+            },
+            "data_description": {
+              "collect_packets": "在诊断下载中保存与设备交换的原始帧。启用后请等待一分钟再下载诊断信息，之后请关闭此选项。设备地址会被隐藏。"
+            }
+          },
+          "log_options": {
+            "name": "日志选项",
+            "description": "详细日志选项。其中大多数会大量写入日志，请勿长时间开启。",
+            "data": {
+              "log_masked": "隐藏敏感信息（公开分享日志时有用）",
+              "log_connection": "记录设备连接详情",
+              "log_messages": "记录解码后的遥测消息",
+              "log_packets": "记录原始遥测帧",
+              "log_encrypted_payloads": "记录加密数据",
+              "log_payloads": "记录解密数据",
+              "log_bleak": "启用 bleak 调试日志级别（不隐藏敏感信息，也不限于此设备）"
+            }
+          },
+          "advanced_connection_options": {
+            "name": "高级连接选项",
+            "description": "这些选项影响蓝牙连接行为，仅在遇到连接问题时更改。",
+            "data": {
+              "connection_timeout": "连接超时",
+              "bluez_start_notify": "使用 BlueZ start notify"
+            },
+            "data_description": {
+              "connection_timeout": "等待设备连接并建立会话的秒数。",
+              "bluez_start_notify": "如果连接多个 BLE 设备时频繁断开，或日志中出现 `AcquireNotify: Read error` / `Unexpected EOF on notification file handle`，请尝试启用此项。"
+            }
+          }
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_error": {
+      "message": "未知错误：{error}"
+    },
+    "unable_to_create_device": {
+      "message": "无法创建 WalleCube BLE 设备"
+    },
+    "device_not_present": {
+      "message": "WalleCube BLE 设备不存在"
+    },
+    "could_not_connect": {
+      "message": "{time} 秒后仍无法连接设备，请查看日志。\n错误信息：{error_msg}"
+    },
+    "session_key_failed": {
+      "message": "无法与设备建立加密会话"
+    },
+    "unsupported_protocol": {
+      "message": "设备未提供预期的蓝牙特征：{error_msg}"
+    },
+    "could_not_connect_no_retry": {
+      "message": "尝试 {attempts} 次后仍无法连接设备"
+    },
+    "failed_after_successful_connection": {
+      "message": "设备已连接但未建立会话，最后状态：{last_state}"
+    },
+    "setting_failed": {
+      "message": "无法更改设置：{error}"
+    }
+  },
+  "issues": {
+    "max_connection_attempts_reached": {
+      "title": "尝试 {attempts} 次后仍无法连接 {device_name}",
+      "description": "尝试 {attempts} 次后仍无法连接 {device_name}，详情请查看日志。\n\n为避免日志刷屏，已停用自动重试，需要手动重新加载集成。连接成功后此错误会自动清除。"
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "input_power_ok": {
+        "name": "输入电源"
+      },
+      "charging": {
+        "name": "充电中"
+      },
+      "discharging": {
+        "name": "放电中"
+      },
+      "overload": {
+        "name": "过载"
+      },
+      "shutdown_imminent": {
+        "name": "即将关机"
+      }
+    },
+    "number": {
+      "adapter_voltage": {
+        "name": "电源适配器电压"
+      },
+      "adapter_current": {
+        "name": "电源适配器电流"
+      },
+      "standby_time": {
+        "name": "无输出休眠时间"
+      },
+      "standby_current_threshold": {
+        "name": "无输出休眠最小电流"
+      },
+      "screen_timeout": {
+        "name": "屏幕休眠时间"
+      }
+    },
+    "select": {
+      "temperature_unit": {
+        "name": "温度显示单位",
+        "state": {
+          "celsius": "摄氏度 (°C)",
+          "fahrenheit": "华氏度 (°F)"
+        }
+      },
+      "screen_language": {
+        "name": "屏幕显示语言",
+        "state": {
+          "english": "English",
+          "chinese": "中文"
+        }
+      },
+      "buzzer_mode": {
+        "name": "蜂鸣器设置",
+        "state": {
+          "mute": "静音",
+          "once": "提醒一次",
+          "repeat": "持续提醒"
+        }
+      }
+    },
+    "sensor": {
+      "battery_level": {
+        "name": "电池电量"
+      },
+      "battery_voltage": {
+        "name": "电池电压"
+      },
+      "battery_current": {
+        "name": "电池电流"
+      },
+      "dc_input_voltage": {
+        "name": "输入电压"
+      },
+      "dc_input_current": {
+        "name": "输入电流"
+      },
+      "dc_output_voltage": {
+        "name": "输出电压"
+      },
+      "dc_output_current": {
+        "name": "输出电流"
+      },
+      "output_power": {
+        "name": "输出功率"
+      },
+      "temperature": {
+        "name": "电池温度"
+      },
+      "remaining_time_discharging": {
+        "name": "剩余放电时间"
+      },
+      "energy_total": {
+        "name": "总用电量"
+      }
+    },
+    "switch": {
+      "screen_always_on": {
+        "name": "屏幕常亮"
+      }
+    }
+  }
+}

@@ -10,8 +10,10 @@ from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
 from custom_components.wallecube_ble.wclib.keydata import SESSION_SECRET
 from custom_components.wallecube_ble.wclib.packet import (
     FRAME_MAGIC,
+    ConfigMessage,
     decode_response,
     encode_command,
+    encode_config_message,
 )
 
 # vectors computed from the firmware key schedule for two addresses of one unit
@@ -119,3 +121,26 @@ def test_candidate_base_macs_without_hint_starts_with_bt_offset():
     candidates = list(candidate_base_macs("88:56:A6:00:C4:BE"))
 
     assert candidates[0] == bytes.fromhex("8856a600c4bc")
+
+
+def test_config_message_round_trip():
+    frame = encode_config_message(0xEE434059, 0x0B, b"\x2c\x01\x00\x00", nonce=b"ab")
+
+    assert frame == bytes.fromhex("4b04") + b"ab" + bytes.fromhex("594043ee 2c010000")
+    message = ConfigMessage.from_bytes(frame + bytes(4))
+    assert message.message_type == 0x0B
+    assert message.token == 0xEE434059
+    assert message.payload == b"\x2c\x01\x00\x00"
+
+
+@pytest.mark.parametrize(
+    "plaintext",
+    [
+        bytes(16),  # missing type tag
+        bytes.fromhex("4c05 0000 00000000 2c01"),  # shorter than its length byte
+        bytes.fromhex("4c00 00"),  # truncated header
+    ],
+)
+def test_config_message_rejects_malformed_frames(plaintext: bytes):
+    with pytest.raises(PacketParseError):
+        ConfigMessage.from_bytes(plaintext)

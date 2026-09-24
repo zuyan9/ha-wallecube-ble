@@ -5,6 +5,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib.connection import (
+    CONFIG_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
     TELEMETRY_CHARACTERISTIC_UUID,
     Connection,
@@ -48,14 +49,34 @@ def establish(mocker: MockerFixture, client):
     )
 
 
-def make_connection(data_parse=None, base_mac_hint: bytes | None = BASE_MAC):
+def make_connection(
+    data_parse=None, base_mac_hint: bytes | None = BASE_MAC, config_parse=None
+):
     ble_dev = MagicMock(address=ADDRESS)
     ble_dev.name = "Walle-8856A600C4BC"
     return Connection(
         ble_dev=ble_dev,
         data_parse=data_parse or AsyncMock(return_value=True),
         base_mac_hint=base_mac_hint,
+        config_parse=config_parse,
     ).with_disabled_reconnect()
+
+
+def notify_handler(client, uuid: str):
+    for args in client.start_notify.await_args_list:
+        if args.args[0].uuid == uuid:
+            return args.args[1]
+    raise AssertionError(f"{uuid} was not subscribed")
+
+
+def config_ciphertext(message_type: int, payload: bytes, token: int) -> bytes:
+    plaintext = (
+        bytes([0x40 | message_type, len(payload)])
+        + b"\x12\x34"
+        + token.to_bytes(4, "little")
+        + payload
+    )
+    return SessionCipher(derive_session_key(BASE_MAC)).encrypt(plaintext)
 
 
 async def test_connect_establishes_session_from_advertised_name(establish, client):
@@ -152,3 +173,46 @@ async def test_disconnect_sets_disconnected(establish, client):
 
     assert conn.state is ConnectionState.DISCONNECTED
     client.disconnect.assert_awaited_once()
+
+
+async def test_config_notifications_are_decrypted_and_forwarded(establish, client):
+    config_parse = AsyncMock(return_value=True)
+    conn = make_connection(config_parse=config_parse)
+    await conn.connect()
+    token = derive_session_key(BASE_MAC).token
+
+    handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
+    await handler(
+        None, bytearray(config_ciphertext(0x0C, b"\x2c\x01\x00\x00\x46", token))
+    )
+
+    message = config_parse.await_args.args[0]
+    assert message.message_type == 0x0C
+    assert message.payload == b"\x2c\x01\x00\x00\x46"
+
+
+async def test_config_notifications_with_foreign_token_are_ignored(establish, client):
+    config_parse = AsyncMock(return_value=True)
+    conn = make_connection(config_parse=config_parse)
+    await conn.connect()
+
+    handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
+    await handler(None, bytearray(config_ciphertext(0x0C, bytes(5), 0x11223344)))
+
+    config_parse.assert_not_awaited()
+
+
+async def test_send_config_writes_config_frame(establish, client):
+    conn = make_connection(config_parse=AsyncMock())
+    await conn.connect()
+
+    await conn.send_config(0x0B, b"\x58\x02\x00\x00")
+
+    characteristic, frame = client.write_gatt_char.await_args.args
+    assert characteristic.uuid == CONFIG_CHARACTERISTIC_UUID
+    session_key = derive_session_key(BASE_MAC)
+    plaintext = SessionCipher(session_key).decrypt(frame)
+    # type 0x0B tagged with 0x40, payload length, 2-byte nonce, token, payload
+    assert plaintext[:2] == b"\x4b\x04"
+    assert int.from_bytes(plaintext[4:8], "little") == session_key.token
+    assert plaintext[8:12] == b"\x58\x02\x00\x00"

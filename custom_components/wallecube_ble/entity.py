@@ -1,13 +1,31 @@
 import dataclasses
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol, runtime_checkable
 
+from bleak.exc import BleakError
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
 from homeassistant.helpers.entity import Entity, EntityDescription
 
 from .const import DOMAIN, MANUFACTURER
 from .wclib import DeviceBase
+from .wclib.exceptions import (
+    PacketParseError,
+    SessionKeyError,
+    SettingUnavailable,
+    UnsupportedBluetoothProtocol,
+)
+
+_SETTING_ERRORS = (
+    BleakError,
+    ConnectionError,
+    TimeoutError,
+    PacketParseError,
+    SessionKeyError,
+    SettingUnavailable,
+    UnsupportedBluetoothProtocol,
+)
 
 
 class WalleCubeEntity(Entity):
@@ -59,6 +77,19 @@ class WalleCubeEntity(Entity):
             self.async_write_ha_state()
 
         self._update_callbacks.append((prop_name, state_updated))
+
+    async def _change_setting[*Ts](
+        self, setter: Callable[[DeviceBase, *Ts], Awaitable[None]], *args: *Ts
+    ) -> None:
+        """Call a device setter, reporting communication failures to the user"""
+        try:
+            await setter(self._device, *args)
+        except _SETTING_ERRORS as e:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="setting_failed",
+                translation_placeholders={"error": str(e)},
+            ) from e
 
     async def async_added_to_hass(self) -> None:
         for prop, state_callback in self._update_callbacks:

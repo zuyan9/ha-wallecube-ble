@@ -39,7 +39,13 @@ def _uuid16(value: int) -> str:
 
 UPS_SERVICE_UUID = _uuid16(0xF0A1)
 TELEMETRY_CHARACTERISTIC_UUID = _uuid16(0xF0B1)
+ADAPTER_CHARACTERISTIC_UUID = _uuid16(0xF0B2)
+BUZZER_CHARACTERISTIC_UUID = _uuid16(0xF0B3)
+STANDBY_CHARACTERISTIC_UUID = _uuid16(0xF0B4)
+LANGUAGE_CHARACTERISTIC_UUID = _uuid16(0xF0B8)
+TEMPERATURE_UNIT_CHARACTERISTIC_UUID = _uuid16(0xF0B9)
 INFO_CHARACTERISTIC_UUID = _uuid16(0xF0BF)
+CONFIG_CHARACTERISTIC_UUID = _uuid16(0xF0C1)
 
 
 class ConnectionState(StrEnum):
@@ -131,6 +137,7 @@ type ConnectionStateListener = Callable[[ConnectionState], None]
 type DataReceivedListener = Callable[[bytes, ConnectionState], None]
 type DataSendListener = Callable[[bytes], None]
 type DataParser = Callable[[bytes], Awaitable[bool]]
+type ConfigParser = Callable[[packet.ConfigMessage], Awaitable[bool]]
 
 
 class _ConnectionListeners(ListenerRegistry):
@@ -157,10 +164,12 @@ class Connection:
         ble_dev: BLEDevice,
         data_parse: DataParser,
         base_mac_hint: bytes | None = None,
+        config_parse: ConfigParser | None = None,
     ) -> None:
         self._ble_dev = ble_dev
         self._address = ble_dev.address
         self._data_parse = data_parse
+        self._config_parse = config_parse
         self._base_mac_hint = base_mac_hint
         self._options = Connection.Options()
         self._logger = ConnectionLogger(self)
@@ -446,6 +455,23 @@ class Connection:
             self._characteristic(characteristic), frame, response=True
         )
 
+    async def send_config(self, message_type: int, payload: bytes = b"") -> None:
+        """Encrypt a message and write it to the configuration characteristic"""
+        client, cipher = self._require_session()
+        frame = cipher.encrypt(
+            packet.encode_config_message(cipher.token, message_type, payload)
+        )
+        self._logger.log_filtered(
+            LogOptions.DECRYPTED_PAYLOADS,
+            "Write config message 0x%02x: %r",
+            message_type,
+            payload,
+        )
+        self._listeners.on_data_send(frame)
+        await client.write_gatt_char(
+            self._characteristic(CONFIG_CHARACTERISTIC_UUID), frame, response=True
+        )
+
     async def add_error(self, exception: Exception) -> None:
         tb = "".join(traceback.format_tb(exception.__traceback__))
         self._logger.error("Captured exception: %s:\n%s", exception, tb)
@@ -511,6 +537,16 @@ class Connection:
         kwargs = {}
         if self._options.bluez_start_notify:
             kwargs["bluez"] = {"use_start_notify": True}
+
+        # answers to configuration requests arrive as notifications, telemetry works
+        # without them, so a device lacking the characteristic is not an error
+        if self._config_parse is not None and (
+            config := self._client.services.get_characteristic(
+                CONFIG_CHARACTERISTIC_UUID
+            )
+        ):
+            await self._client.start_notify(config, self._on_config, **kwargs)
+
         await self._client.start_notify(
             self._characteristic(TELEMETRY_CHARACTERISTIC_UUID),
             self._on_telemetry,
@@ -533,6 +569,31 @@ class Connection:
             self._logger.log_filtered(
                 LogOptions.CONNECTION_DEBUG, "Unprocessed frame: %r", frame
             )
+
+    async def _on_config(self, _: BleakGATTCharacteristic, data: bytearray) -> None:
+        frame = bytes(data)
+        self._listeners.on_data_received(frame, self._connection_state)
+        if self._cipher is None or self._config_parse is None:
+            return
+
+        try:
+            plaintext = self._cipher.decrypt(frame)
+            message = packet.ConfigMessage.from_bytes(plaintext)
+        except PacketParseError as e:
+            self._logger.warning("Could not decode configuration message: %s", e)
+            return
+
+        self._logger.log_filtered(
+            LogOptions.DECRYPTED_PAYLOADS, "Config message: %r", plaintext
+        )
+        if message.token != self._cipher.token:
+            self._logger.warning("Ignoring configuration message with foreign token")
+            return
+
+        try:
+            await self._config_parse(message)
+        except Exception as e:  # noqa: BLE001
+            await self.add_error(e)
 
     def _characteristic(self, uuid: str) -> BleakGATTCharacteristic:
         assert self._client is not None

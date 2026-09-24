@@ -275,4 +275,6 @@ for sending. Defaults: 30 s, 30 s, 35 %.
 
 Types `0x03` and `0x10` exist in the firmware but are not used by the vendor app.
 
-The integration does not expose any of these controls yet.
+The integration exposes the settings of the vendor app's advanced configuration page:
+adapter, standby, screen timeout, temperature unit, screen language and buzzer. The
+factory reset, `0xF0B7`, Wake-on-LAN and Wi-Fi are not exposed.

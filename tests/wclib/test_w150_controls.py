@@ -1,0 +1,242 @@
+import struct
+from unittest.mock import AsyncMock, MagicMock, call
+
+import pytest
+from pytest_mock import MockerFixture
+
+from custom_components.wallecube_ble.wclib import controls, get_controls
+from custom_components.wallecube_ble.wclib.connection import (
+    ADAPTER_CHARACTERISTIC_UUID,
+    BUZZER_CHARACTERISTIC_UUID,
+    LANGUAGE_CHARACTERISTIC_UUID,
+    STANDBY_CHARACTERISTIC_UUID,
+    TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
+)
+from custom_components.wallecube_ble.wclib.devices.w150 import (
+    SCREEN_ALWAYS_ON,
+    BuzzerMode,
+    Device,
+    ScreenLanguage,
+    TemperatureUnit,
+)
+from custom_components.wallecube_ble.wclib.exceptions import (
+    SettingUnavailable,
+    UnsupportedBluetoothProtocol,
+)
+from custom_components.wallecube_ble.wclib.model import AdapterSettings
+from custom_components.wallecube_ble.wclib.packet import ConfigMessage
+
+# read responses carry the payload after the magic byte, zero padded to a block
+ADAPTER_12V_3A = struct.pack("<5H", 3000, 2000, 12000, 11580, 11496) + bytes(5)
+STANDBY_300S_100MA = struct.pack("<2H", 300, 100) + bytes(11)
+
+
+@pytest.fixture
+def device(mocker: MockerFixture):
+    adv = mocker.MagicMock(local_name="Walle-8856A600C4BC", service_uuids=[])
+    ble_dev = mocker.Mock(address="88:56:A6:00:C4:BE")
+    ble_dev.name = adv.local_name
+    return Device(ble_dev, adv)
+
+
+@pytest.fixture
+def settings(device: Device, mocker: MockerFixture):
+    """Fake device storage behind read_value/send_command"""
+    values = {
+        ADAPTER_CHARACTERISTIC_UUID: ADAPTER_12V_3A,
+        STANDBY_CHARACTERISTIC_UUID: STANDBY_300S_100MA,
+        BUZZER_CHARACTERISTIC_UUID: b"\x01" + bytes(14),
+        LANGUAGE_CHARACTERISTIC_UUID: b"\x00" + bytes(14),
+        TEMPERATURE_UNIT_CHARACTERISTIC_UUID: b"\x00" + bytes(14),
+    }
+
+    async def read_value(characteristic: str) -> bytes:
+        return values[characteristic]
+
+    async def send_command(characteristic: str, payload: bytes = b"") -> None:
+        values[characteristic] = payload + bytes(15 - len(payload))
+
+    mocker.patch.object(device, "read_value", side_effect=read_value)
+    mocker.patch.object(device, "send_command", side_effect=send_command)
+    mocker.patch.object(device, "send_config", new=AsyncMock())
+    return values
+
+
+def screen_reply(timeout: int, idle_backlight: int = 70) -> ConfigMessage:
+    return ConfigMessage(
+        message_type=0x0C,
+        token=0,
+        payload=struct.pack("<IB", timeout, idle_backlight),
+    )
+
+
+def test_declares_controls_of_the_app_settings_page(device: Device):
+    assert {c.key for c in get_controls(device, controls.select)} == {
+        "buzzer_mode",
+        "screen_language",
+        "temperature_unit",
+    }
+    assert {c.key for c in get_controls(device, controls.NumberType)} == {
+        "adapter_voltage",
+        "adapter_current",
+        "standby_time",
+        "standby_current_threshold",
+        "screen_timeout",
+    }
+    assert [c.key for c in get_controls(device, controls.switch)] == [
+        "screen_always_on"
+    ]
+
+
+def test_adapter_controls_are_disabled_by_default(device: Device):
+    enabled = {c.key: c.enabled for c in get_controls(device, controls.NumberType)}
+
+    assert enabled["adapter_voltage"] is False
+    assert enabled["adapter_current"] is False
+    assert enabled["standby_time"] is True
+
+
+def test_select_options_follow_enum_order(device: Device):
+    buzzer = next(
+        c for c in get_controls(device, controls.select) if c.key == "buzzer_mode"
+    )
+
+    assert buzzer.options_str == ["mute", "once", "repeat"]
+
+
+async def test_refresh_reads_all_settings(device: Device, settings):
+    await device.refresh_settings()
+
+    assert device.adapter_voltage == 12.0
+    assert device.adapter_current == 3.0
+    assert device.standby_time == 300
+    assert device.standby_current_threshold == 100
+    assert device.buzzer_mode is BuzzerMode.ONCE
+    assert device.screen_language is ScreenLanguage.ENGLISH
+    assert device.temperature_unit is TemperatureUnit.CELSIUS
+    device.send_config.assert_awaited_once_with(0x0C)
+
+
+async def test_refresh_skips_missing_characteristics(
+    device: Device, settings, mocker: MockerFixture
+):
+    read = device.read_value
+
+    async def read_value(characteristic: str) -> bytes:
+        if characteristic == TEMPERATURE_UNIT_CHARACTERISTIC_UUID:
+            raise UnsupportedBluetoothProtocol(characteristic, [])
+        return await read(characteristic)
+
+    mocker.patch.object(device, "read_value", side_effect=read_value)
+
+    await device.refresh_settings()
+
+    assert device.temperature_unit is None
+    assert device.buzzer_mode is BuzzerMode.ONCE
+
+
+async def test_select_writes_option_value(device: Device, settings):
+    control = next(
+        c for c in get_controls(device, controls.select) if c.key == "buzzer_mode"
+    )
+    state_callback = MagicMock()
+    device.register_state_update_callback(state_callback, "buzzer_mode")
+
+    await control.set_value_func(device, "repeat")
+
+    device.send_command.assert_awaited_once_with(BUZZER_CHARACTERISTIC_UUID, b"\x02")
+    assert device.buzzer_mode is BuzzerMode.REPEAT
+    state_callback.assert_called_once_with(BuzzerMode.REPEAT)
+
+
+async def test_unknown_select_value_reads_as_none(device: Device, settings):
+    settings[LANGUAGE_CHARACTERISTIC_UUID] = b"\x07" + bytes(14)
+
+    await device.refresh_settings()
+
+    assert device.screen_language is None
+
+
+def test_adapter_limits_are_derived_like_the_vendor_app():
+    settings = AdapterSettings.from_adapter(12.0, 3.0)
+
+    # the app computes 12.0 * 0.958 * 1000 in floating point and truncates to 11495
+    assert settings.to_bytes() == struct.pack("<5H", 3000, 2100, 12000, 11580, 11495)
+
+
+async def test_adapter_voltage_rewrites_block_with_current_rating(
+    device: Device, settings
+):
+    await device.set_adapter_voltage(19.5)
+
+    payload = device.send_command.await_args.args[1]
+    assert struct.unpack("<5H", payload) == (3000, 2100, 19500, 18817, 18681)
+    assert device.adapter_voltage == 19.5
+    assert device.adapter_current == 3.0
+
+
+async def test_standby_change_keeps_the_other_value(device: Device, settings):
+    await device.set_standby_current_threshold(250)
+
+    device.send_command.assert_awaited_once_with(
+        STANDBY_CHARACTERISTIC_UUID, struct.pack("<2H", 300, 250)
+    )
+    assert device.standby_current_threshold == 250
+
+
+async def test_standby_change_fails_when_current_values_are_unreadable(
+    device: Device, settings
+):
+    settings[STANDBY_CHARACTERISTIC_UUID] = b""
+
+    with pytest.raises(SettingUnavailable):
+        await device.set_standby_time(120)
+
+    device.send_command.assert_not_awaited()
+
+
+async def test_number_control_clamps_to_device_range(device: Device, settings):
+    control = next(
+        c for c in get_controls(device, controls.NumberType) if c.key == "standby_time"
+    )
+
+    await control.set_value_func(device, 5)
+
+    assert device.send_command.await_args.args[1] == struct.pack("<2H", 20, 100)
+
+
+async def test_screen_timeout_is_set_over_the_config_channel(device: Device):
+    device.send_config = AsyncMock()
+
+    await device.set_screen_timeout(600)
+
+    assert device.send_config.await_args_list == [
+        call(0x0B, struct.pack("<I", 600)),
+        call(0x0C),
+    ]
+
+
+async def test_screen_reply_updates_timeout_and_always_on(device: Device):
+    assert await device.config_parse(screen_reply(600)) is True
+    assert device.screen_timeout == 600
+    assert device.screen_always_on is False
+
+    await device.config_parse(screen_reply(SCREEN_ALWAYS_ON))
+    assert device.screen_timeout is None
+    assert device.screen_always_on is True
+
+
+async def test_turning_always_on_off_restores_last_timeout(device: Device):
+    device.send_config = AsyncMock()
+    await device.config_parse(screen_reply(900))
+    await device.config_parse(screen_reply(SCREEN_ALWAYS_ON))
+
+    await device.enable_screen_always_on(False)
+
+    assert device.send_config.await_args_list[0] == call(0x0B, struct.pack("<I", 900))
+
+
+async def test_ignores_other_config_messages(device: Device):
+    message = ConfigMessage(message_type=0x0A, token=0, payload=bytes(6))
+
+    assert await device.config_parse(message) is False
