@@ -103,6 +103,11 @@ class TelemetryFrame:
     payload: bytes
 
     @property
+    def event(self) -> int:
+        """Event byte, set only on the sample where input power is lost or returns"""
+        return self.header >> 8
+
+    @property
     def truncated(self) -> bool:
         return len(self.payload) < self.SIZE - self.HEADER_SIZE
 

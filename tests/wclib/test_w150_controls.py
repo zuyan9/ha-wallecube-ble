@@ -14,6 +14,7 @@ from custom_components.wallecube_ble.wclib.connection import (
     STANDBY_CHARACTERISTIC_UUID,
     TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
 )
+from custom_components.wallecube_ble.wclib.devices import w150
 from custom_components.wallecube_ble.wclib.devices.w150 import (
     SCREEN_ALWAYS_ON,
     BuzzerMode,
@@ -75,6 +76,41 @@ def screen_reply(timeout: int, idle_backlight: int = 70) -> ConfigMessage:
     )
 
 
+def wifi_reply(
+    *, rssi: int = -61, ip: str = "192.0.2.23", ssid: bytes = b"HomeAP"
+) -> ConfigMessage:
+    payload = struct.pack(
+        "<Bb4s4s4sB",
+        1,
+        rssi,
+        bytes(int(part) for part in ip.split(".")),
+        bytes([192, 0, 2, 1]),
+        bytes([255, 255, 255, 0]),
+        len(ssid),
+    )
+    return ConfigMessage(message_type=0x01, token=0, payload=payload + ssid)
+
+
+@pytest.fixture
+def screen(device: Device, mocker: MockerFixture):
+    """Fake screen settings behind the configuration channel"""
+    values = {"timeout": 600, "idle": 70}
+
+    async def send_config(message_type: int, payload: bytes = b"") -> None:
+        await asyncio.sleep(0)
+        if message_type == 0x0B:
+            values["timeout"] = int.from_bytes(payload[:4], "little")
+            if len(payload) > 4:
+                values["idle"] = payload[4]
+        elif message_type == 0x0C:
+            # the reply arrives as a notification after the write returned
+            reply = screen_reply(values["timeout"], values["idle"])
+            asyncio.get_running_loop().create_task(device.config_parse(reply))
+
+    mocker.patch.object(device, "send_config", side_effect=send_config)
+    return values
+
+
 def test_declares_controls_of_the_app_settings_page(device: Device):
     assert {c.key for c in get_controls(device, controls.select)} == {
         "buzzer_mode",
@@ -87,6 +123,8 @@ def test_declares_controls_of_the_app_settings_page(device: Device):
         "standby_time",
         "standby_current_threshold",
         "screen_timeout",
+        "screen_brightness",
+        "screen_idle_brightness",
     }
     assert [c.key for c in get_controls(device, controls.switch)] == [
         "screen_always_on"
@@ -119,7 +157,8 @@ async def test_refresh_reads_all_settings(device: Device, settings):
     assert device.buzzer_mode is BuzzerMode.ONCE
     assert device.screen_language is ScreenLanguage.ENGLISH
     assert device.temperature_unit is TemperatureUnit.CELSIUS
-    device.send_config.assert_awaited_once_with(0x0C)
+    # screen settings and Wi-Fi status are answered with notifications
+    assert device.send_config.await_args_list == [call(0x0C), call(0x0E), call(0x01)]
 
 
 async def test_refresh_skips_missing_characteristics(
@@ -241,6 +280,98 @@ async def test_turning_always_on_off_restores_last_timeout(device: Device):
     await device.enable_screen_always_on(False)
 
     assert device.send_config.await_args_list[0] == call(0x0B, struct.pack("<I", 900))
+
+
+async def test_screen_reply_updates_idle_brightness(device: Device):
+    await device.config_parse(screen_reply(600, idle_backlight=30))
+
+    assert device.screen_idle_brightness == 30
+
+
+async def test_screen_brightness_is_set_over_the_config_channel(device: Device):
+    device.send_config = AsyncMock()
+
+    await device.set_screen_brightness(55)
+    await device.set_screen_brightness(5)
+
+    assert device.send_config.await_args_list == [
+        call(0x0D, bytes([55])),
+        call(0x0E),
+        call(0x0D, bytes([20])),
+        call(0x0E),
+    ]
+
+
+async def test_brightness_reply_updates_brightness(device: Device):
+    message = ConfigMessage(message_type=0x0E, token=0, payload=bytes([80]))
+
+    assert await device.config_parse(message) is True
+    assert device.screen_brightness == 80
+
+
+async def test_idle_brightness_is_written_with_the_current_timeout(
+    device: Device, screen
+):
+    await device.config_parse(screen_reply(600))
+    # changed on the device while HA stays connected
+    screen["timeout"] = 900
+
+    await device.set_screen_idle_brightness(40)
+    await asyncio.sleep(0)
+
+    assert screen == {"timeout": 900, "idle": 40}
+    assert device.screen_timeout == 900
+    assert device.screen_idle_brightness == 40
+
+
+async def test_idle_brightness_keeps_the_screen_always_on(device: Device, screen):
+    screen["timeout"] = SCREEN_ALWAYS_ON
+
+    await device.set_screen_idle_brightness(0)
+
+    assert screen == {"timeout": SCREEN_ALWAYS_ON, "idle": 0}
+
+
+async def test_idle_brightness_fails_when_the_timeout_is_not_answered(
+    device: Device, mocker: MockerFixture
+):
+    mocker.patch.object(w150, "_CONFIG_REPLY_TIMEOUT", 0.01)
+    device.send_config = AsyncMock()
+
+    with pytest.raises(TimeoutError):
+        await device.set_screen_idle_brightness(40)
+
+    device.send_config.assert_awaited_once_with(0x0C)
+
+
+async def test_wifi_status_reply_updates_network_fields(device: Device):
+    assert await device.config_parse(wifi_reply()) is True
+
+    assert device.wifi_connected is True
+    assert device.wifi_rssi == -61
+    assert device.wifi_ip_address == "192.0.2.23"
+    assert device.wifi_ssid == "HomeAP"
+
+
+async def test_disconnected_wifi_status_clears_network_fields(device: Device):
+    await device.config_parse(wifi_reply())
+    # the firmware leaves the SSID length uninitialized while disconnected
+    message = ConfigMessage(message_type=0x01, token=0, payload=bytes(14) + b"\x9c")
+
+    await device.config_parse(message)
+
+    assert device.wifi_connected is False
+    assert device.wifi_rssi is None
+    assert device.wifi_ip_address is None
+    assert device.wifi_ssid is None
+
+
+async def test_poll_requests_wifi_status(device: Device):
+    device.send_config = AsyncMock()
+
+    await device.poll()
+
+    device.send_config.assert_awaited_once_with(0x01)
 
 
 async def test_ignores_other_config_messages(device: Device):

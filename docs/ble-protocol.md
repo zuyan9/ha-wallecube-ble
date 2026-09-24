@@ -149,8 +149,11 @@ The vendor app calls the battery current "charging current". This suggests that
 positive values mean charging, but it is not confirmed on hardware.
 
 **Event byte**: the front panel sends `0x02` on the sample where input power is lost,
-`0x01` on the sample where it returns and `0x00` otherwise. The vendor app labels `0x01`
-"PowerDown" and `0x02` "PowerOn", the opposite of what the firmware logic implies.
+`0x01` on the sample where it returns and `0x00` otherwise. It sends that sample as an
+extra notification right away. The vendor app labels `0x01` "PowerDown" and `0x02`
+"PowerOn", the opposite of the firmware logic: with `0x02` the firmware starts the
+Wake-on-LAN outage timer, with `0x01` the delay after input power returns. No event is
+sent for the first sample after boot.
 
 **Remaining time**: the front panel shows payload offset 26 divided by 60 as minutes. It
 does so only under all of these conditions:
@@ -251,8 +254,22 @@ read returns the screen-language byte. The vendor app never uses `0xF0B7`, and t
 power-board firmware is not available, so the effect is unknown. Do not write it except
 in a deliberate hardware test.
 
-**Info block (`0xF0BF`)**: `0x51`, the power-board firmware version (4 bytes), then two
-u16 values that are constant in the firmware (3 and 19).
+**Info block (`0xF0BF`)**: 10 bytes, zero padded to a block:
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | u8 | magic `0x51` |
+| 1 | u8 | not initialized |
+| 2 | u16 | power-board hardware version |
+| 4 | u16 | power-board firmware version |
+| 6 | u16 | front-panel hardware version, 3 in the analyzed firmware |
+| 8 | u16 | front-panel firmware version, 19 in the analyzed firmware |
+
+The front panel asks the power board for its two versions over UART (command `0x0A`) at
+boot and reports 0 for both if it gets no answer. It sends the same four values to the
+vendor cloud, which lists them as UPS and system hardware and software versions. The
+vendor app shows the cloud's version strings, e.g. `1.19` for front-panel firmware 19, so
+they do not match the raw numbers.
 
 ### Configuration service
 
@@ -272,8 +289,28 @@ u16 values that are constant in the firmware (3 and 19).
 | `0x0D` | u8 backlight (%, 20-100) | set active backlight |
 | `0x0E` | - | request active backlight, answered as type `0x0E` with u8 backlight |
 
+Set requests are not answered.
+
 After the screen timeout expires without interaction, the screen switches to its idle
 view at the idle backlight level. Defaults: timeout 300 s, both backlight levels 70 %.
+The idle backlight has no lower limit, so 0 turns the screen dark. It can only be
+written together with the timeout.
+
+The **Wi-Fi status** request (`0x01`) is answered as type `0x01`:
+
+| Payload offset | Type | Field |
+| --- | --- | --- |
+| 0 | u8 | 1 if connected, else 0 |
+| 1 | s8 | signal strength (dBm) |
+| 2 | 4 bytes | IP address |
+| 6 | 4 bytes | gateway |
+| 10 | 4 bytes | netmask |
+| 14 | u8 | SSID length n |
+| 15 | n bytes | SSID |
+
+Addresses are in dotted order. While disconnected, offsets 0-13 are zero and the SSID
+length is not initialized. With a 32-byte SSID the encrypted reply is 64 bytes, so it
+needs a larger MTU than the default, like the telemetry notifications.
 
 The **Wake-on-LAN trigger** makes the UPS send magic packets to the stored targets over
 its network connection after an outage. Its payload is three u16 values:
@@ -287,5 +324,7 @@ Defaults: 30 s, 30 s, 35 %.
 Types `0x03` and `0x10` exist in the firmware but are not used by the vendor app.
 
 The integration exposes the settings of the vendor app's advanced configuration page:
-adapter, standby, screen timeout, temperature unit, screen language and buzzer. The
-factory reset, `0xF0B7`, Wake-on-LAN and Wi-Fi are not exposed.
+adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
+exposes both screen backlight levels, the versions from the info block, the event byte
+and the Wi-Fi status, which it requests every minute. The factory reset, `0xF0B7`,
+Wake-on-LAN and Wi-Fi setup are not exposed.

@@ -12,7 +12,7 @@ from custom_components.wallecube_ble.wclib.connection import (
     UPS_SERVICE_UUID,
     ConnectionState,
 )
-from custom_components.wallecube_ble.wclib.devices.w150 import Device
+from custom_components.wallecube_ble.wclib.devices.w150 import Device, PowerEvent
 from custom_components.wallecube_ble.wclib.encryption import (
     SessionCipher,
     derive_session_key,
@@ -35,6 +35,7 @@ def telemetry_frame(
     remaining_seconds: int = 7_260,
     energy_raw: int = 1_234_567,
     status_flags: int = 0,
+    event: int = 0,
 ) -> bytes:
     """Build a 40-byte telemetry notification: magic, event byte, 38-byte payload"""
     payload = struct.pack(
@@ -55,7 +56,7 @@ def telemetry_frame(
         status_flags,
     )
     assert len(payload) == 38
-    return b"\x51\x00" + payload
+    return bytes([0x51, event]) + payload
 
 
 @pytest.fixture
@@ -179,6 +180,57 @@ async def test_decodes_truncated_frame_partially(device: Device):
     assert device.charging is None
 
 
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        (0, None),
+        (1, PowerEvent.POWER_RESTORED),
+        (2, PowerEvent.POWER_LOST),
+        (7, None),
+    ],
+)
+async def test_parses_event_byte(device: Device, event: int, expected):
+    await device.data_parse(telemetry_frame(event=event))
+
+    assert device.power_event is expected
+
+
+async def test_each_power_event_reaches_state_callbacks(
+    device: Device, mocker: MockerFixture
+):
+    state_callback = mocker.Mock()
+    device.register_state_update_callback(state_callback, "power_event")
+
+    for event in (2, 0, 1, 0, 2):
+        await device.data_parse(telemetry_frame(event=event))
+
+    assert [c.args[0] for c in state_callback.call_args_list] == [
+        PowerEvent.POWER_LOST,
+        None,
+        PowerEvent.POWER_RESTORED,
+        None,
+        PowerEvent.POWER_LOST,
+    ]
+
+
+def test_parses_versions_from_info_block(device: Device):
+    # payload after the magic byte: uninitialized byte, power-board hardware and
+    # firmware, front-panel hardware and firmware, zero padding
+    device.info_parse(bytes.fromhex("aa 0300 1d00 0300 1300") + bytes(6))
+
+    assert device.power_board_hardware_version == 3
+    assert device.power_board_firmware_version == 29
+    assert device.hardware_version == 3
+    assert device.firmware_version == 19
+
+
+def test_power_board_versions_are_unknown_when_not_reported(device: Device):
+    device.info_parse(bytes.fromhex("00 0000 0000 0300 1300") + bytes(6))
+
+    assert device.power_board_firmware_version is None
+    assert device.firmware_version == 19
+
+
 async def test_rejects_frame_without_payload(device: Device):
     with pytest.raises(PacketParseError):
         await device.data_parse(b"\x51\x00")
@@ -229,6 +281,9 @@ async def test_connect_and_notifications_update_fields(
 
     assert state is ConnectionState.AUTHENTICATED
     refresh.assert_awaited_once()
+    # versions come from the info block that keyed the session
+    assert device.firmware_version == 19
+    assert device.power_board_firmware_version == 2
     assert device.battery_level == 87.5
     assert device.remaining_time_discharging == 121
     battery_callback.assert_called_once()
@@ -259,6 +314,25 @@ async def test_disconnect_cancels_running_settings_refresh(
     assert task is not None
     assert task.cancelled() or task.cancelling()
     assert device._refresh_task is None
+    assert device._poll_task is None
+
+
+async def test_polls_wifi_status_while_connected(
+    device: Device, client, mocker: MockerFixture
+):
+    mocker.patch.object(device, "refresh_settings", new=AsyncMock())
+    mocker.patch.object(Device, "POLL_INTERVAL", 0)
+    polled = asyncio.Event()
+    mocker.patch.object(device, "poll", side_effect=lambda: polled.set())
+
+    await device.with_disabled_reconnect().connect()
+    await asyncio.wait_for(polled.wait(), 1)
+    task = device._poll_task
+    await device.disconnect()
+
+    assert task is not None
+    assert task.cancelled() or task.cancelling()
+    assert device._poll_task is None
 
 
 async def test_new_session_replaces_pending_settings_refresh(

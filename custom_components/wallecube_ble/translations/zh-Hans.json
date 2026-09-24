@@ -200,6 +200,22 @@
       },
       "shutdown_imminent": {
         "name": "即将关机"
+      },
+      "wifi_connected": {
+        "name": "WiFi连接"
+      }
+    },
+    "event": {
+      "power_event": {
+        "name": "电源事件",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "power_lost": "断电",
+              "power_restored": "恢复供电"
+            }
+          }
+        }
       }
     },
     "number": {
@@ -217,6 +233,12 @@
       },
       "screen_timeout": {
         "name": "屏幕休眠时间"
+      },
+      "screen_brightness": {
+        "name": "屏幕亮度"
+      },
+      "screen_idle_brightness": {
+        "name": "屏幕休眠亮度"
       }
     },
     "select": {
@@ -276,6 +298,21 @@
       },
       "energy_total": {
         "name": "总用电量"
+      },
+      "power_board_firmware_version": {
+        "name": "UPS版本"
+      },
+      "power_board_hardware_version": {
+        "name": "UPS硬件版本"
+      },
+      "wifi_rssi": {
+        "name": "WiFi信号"
+      },
+      "wifi_ssid": {
+        "name": "WiFi网络"
+      },
+      "wifi_ip_address": {
+        "name": "IP地址"
       }
     },
     "switch": {

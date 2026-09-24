@@ -11,6 +11,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
@@ -152,6 +153,31 @@ def duration(
     )
 
 
+def signal_strength(
+    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
+) -> WalleCubeSensorEntityDescription:
+    return WalleCubeSensorEntityDescription(
+        key=key,
+        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=enabled,
+        **kwargs,
+    )
+
+
+def diagnostic(
+    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
+) -> WalleCubeSensorEntityDescription:
+    """Text value such as a version or a network name"""
+    return WalleCubeSensorEntityDescription(
+        key=key,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=enabled,
+        **kwargs,
+    )
+
+
 _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "battery_level": battery(),
     "battery_voltage": voltage(precision=2),
@@ -165,6 +191,11 @@ _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "remaining_time_discharging": duration(),
     # the raw unit is not confirmed on hardware
     "energy_total": energy(enabled=False, precision=3),
+    "power_board_firmware_version": diagnostic(),
+    "power_board_hardware_version": diagnostic(enabled=False),
+    "wifi_rssi": signal_strength(entity_category=EntityCategory.DIAGNOSTIC),
+    "wifi_ssid": diagnostic(),
+    "wifi_ip_address": diagnostic(),
 }
 
 SENSOR_TYPES: Final[dict[str, SensorEntityDescription]] = (

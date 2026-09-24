@@ -127,6 +127,7 @@ custom_components/wallecube_ble/
 ├── config_flow.py         # Discovery and options flows
 ├── binary_sensor.py       # Status flag entities
 ├── brand/                 # Official WalleCube icon and logo, shown by HA 2026.3+
+├── event.py               # Power lost/restored events
 ├── number.py              # Numeric settings
 ├── select.py              # Option settings
 ├── sensor.py              # Measurement entities

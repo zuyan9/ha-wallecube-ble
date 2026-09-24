@@ -10,6 +10,7 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.const import (
+    PERCENTAGE,
     EntityCategory,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
@@ -22,7 +23,7 @@ from . import DeviceConfigEntry
 from .entity import WalleCubeEntity
 from .wclib import DeviceBase, controls, get_controls
 
-_UNITS: dict[type[controls.NumberType], tuple[NumberDeviceClass, str]] = {
+_UNITS: dict[type[controls.NumberType], tuple[NumberDeviceClass | None, str]] = {
     controls.duration: (NumberDeviceClass.DURATION, UnitOfTime.SECONDS),
     controls.current: (NumberDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE),
     controls.current_ma: (
@@ -30,6 +31,7 @@ _UNITS: dict[type[controls.NumberType], tuple[NumberDeviceClass, str]] = {
         UnitOfElectricCurrent.MILLIAMPERE,
     ),
     controls.voltage: (NumberDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT),
+    controls.percentage: (None, PERCENTAGE),
 }
 
 
@@ -49,8 +51,12 @@ def _describe(control: controls.NumberType) -> WalleCubeNumberEntityDescription:
         native_max_value=control.max,
         native_step=control.step,
         # values are typed in like in the vendor app, a slider over hours of
-        # seconds is not usable
-        mode=NumberMode.BOX,
+        # seconds is not usable; percentages fit a slider
+        mode=(
+            NumberMode.SLIDER
+            if isinstance(control, controls.percentage)
+            else NumberMode.BOX
+        ),
         entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=control.enabled,
         set_value=control.set_value_func,

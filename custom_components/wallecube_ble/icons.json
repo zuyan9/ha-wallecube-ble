@@ -6,6 +6,25 @@
       },
       "shutdown_imminent": {
         "default": "mdi:power-plug-off-outline"
+      },
+      "wifi_connected": {
+        "default": "mdi:wifi",
+        "state": {
+          "off": "mdi:wifi-off"
+        }
+      }
+    },
+    "event": {
+      "power_event": {
+        "default": "mdi:transmission-tower",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "power_lost": "mdi:power-plug-off-outline",
+              "power_restored": "mdi:power-plug-outline"
+            }
+          }
+        }
       }
     },
     "number": {
@@ -23,6 +42,12 @@
       },
       "screen_timeout": {
         "default": "mdi:monitor-off"
+      },
+      "screen_brightness": {
+        "default": "mdi:brightness-6"
+      },
+      "screen_idle_brightness": {
+        "default": "mdi:brightness-4"
       }
     },
     "select": {
@@ -47,6 +72,18 @@
       },
       "remaining_time_discharging": {
         "default": "mdi:battery-clock-outline"
+      },
+      "power_board_firmware_version": {
+        "default": "mdi:chip"
+      },
+      "power_board_hardware_version": {
+        "default": "mdi:chip"
+      },
+      "wifi_ssid": {
+        "default": "mdi:wifi"
+      },
+      "wifi_ip_address": {
+        "default": "mdi:ip-network-outline"
       }
     },
     "switch": {
