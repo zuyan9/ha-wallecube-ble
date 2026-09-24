@@ -31,7 +31,7 @@ def telemetry_frame(
     remaining_seconds: int = 7_260,
     status_flags: int = 0,
 ) -> bytes:
-    """Build a 40-byte telemetry notification: event word + 38-byte payload"""
+    """Build a 40-byte telemetry notification: magic, event byte, 38-byte payload"""
     payload = struct.pack(
         "<HHHHH10shhHH8sH",
         input_mv,
@@ -47,7 +47,7 @@ def telemetry_frame(
         bytes(8),
         status_flags,
     )
-    return b"\x92\x80" + payload
+    return b"\x51\x00" + payload
 
 
 @pytest.fixture
@@ -146,7 +146,7 @@ async def test_decodes_truncated_frame_partially(device: Device):
 
 async def test_rejects_frame_without_payload(device: Device):
     with pytest.raises(PacketParseError):
-        await device.data_parse(b"\x92\x80")
+        await device.data_parse(b"\x51\x00")
 
 
 async def test_connect_and_notifications_update_fields(
