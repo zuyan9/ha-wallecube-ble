@@ -163,12 +163,13 @@ below switches it. The only unmapped command is `0xF0B7`.
 | `0xF0B4` standby | u16 time (s, 20-7200), u16 current threshold (mA, 20-3000) | same 2 × u16 | from power board |
 | `0xF0B5` | empty | - | - |
 | `0xF0B6` reset | empty | - | - |
+| `0xF0B7` | u8, forwarded to the power board | screen-language byte | - |
 | `0xF0B8` language | u8: 0 English, 1 Simplified Chinese | u8 | 0 |
 | `0xF0B9` temperature unit | u8: 0 °C, 1 °F | u8 | 0 |
 
 Values other than 0 and 1 written to `0xF0B8` or `0xF0B9` are stored as 0. In repeat
-mode the buzzer beeps every 2.5 s while status flag bit 10 is clear; what that bit means
-is not confirmed.
+mode the buzzer beeps every 2.5 s while status flag bit 10 is clear; the vendor app calls
+that bit "AC OK".
 
 **Adapter settings (`0xF0B2`)** tell the UPS how much the upstream power adapter can
 deliver. The front panel validates them and forwards them to the power board:
@@ -193,16 +194,17 @@ three further u16 values in the same block, which the device accepts as an optio
 the vendor app does not send them. Standby writes are confirmed like adapter writes, with
 a notification on `0xF0B4` even though that characteristic does not declare Notify.
 
-**`0xF0B5` and `0xF0B6`**: the vendor app sends its "system reset" command to `0xF0B5`.
-In the analyzed firmware (v1.0-37), `0xF0B5` only requests a fresh telemetry sample from
-the power board. The factory reset is on `0xF0B6`: it sends a reset command to the power
-board and restores the front-panel defaults listed here, including the screen settings,
-and clears the Wake-on-LAN list.
+**`0xF0B5` and `0xF0B6`**: the vendor app's "Restore System Settings" action writes
+`0xF0B5`. In the analyzed firmware (v1.0-37), `0xF0B5` only requests a fresh telemetry
+sample from the power board. The factory reset is on `0xF0B6`: it sends a reset command
+to the power board and restores the front-panel defaults listed here, including the
+screen settings, and clears the Wake-on-LAN list.
 
-**`0xF0B7`** forwards its first payload byte to the power board as command `0x18` and
-notifies the result like `0xF0B2`. The vendor app never writes it. Its effect depends on
-the power-board firmware and is unknown, so it must not be used without testing on
-hardware.
+**`0xF0B7` (unmapped)**: a write forwards the first payload byte to the power board as
+command `0x18`. The result is notified on `0xF0B7` in the same way as for `0xF0B2`. A
+read returns the screen-language byte. The vendor app never uses `0xF0B7`, and the
+power-board firmware is not available, so the effect is unknown. Do not write it except
+in a deliberate hardware test.
 
 **Info block (`0xF0BF`)**: `0x51`, the power-board firmware version (4 bytes), then two
 u16 values that are constant in the firmware (3 and 19).
@@ -220,7 +222,7 @@ u16 values that are constant in the firmware (3 and 19).
 | `0x08` | - | request Wake-on-LAN targets |
 | `0x09` | 3 × u16 | set Wake-on-LAN trigger, see below |
 | `0x0A` | - | request Wake-on-LAN trigger, answered as type `0x0A` |
-| `0x0B` | u32 timeout (s, at least 30), optional u8 idle backlight (%, up to 100) | set screen timeout |
+| `0x0B` | u32 timeout (s, at least 30; `0xFFFFFFFF` keeps the screen on), optional u8 idle backlight (%, up to 100) | set screen timeout |
 | `0x0C` | - | request screen timeout, answered as type `0x0C` with u32 timeout and u8 idle backlight |
 | `0x0D` | u8 backlight (%, 20-100) | set active backlight |
 | `0x0E` | - | request active backlight, answered as type `0x0E` with u8 backlight |
