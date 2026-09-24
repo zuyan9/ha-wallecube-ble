@@ -1,0 +1,27 @@
+name: New device support
+description: A WalleCube model other than the W150 that isn't recognized or doesn't work
+title: "[Device]: "
+labels: ["new device"]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: Device model
+      placeholder: "W120"
+    validations:
+      required: true
+
+  - type: input
+    id: local-name
+    attributes:
+      label: Advertised Bluetooth name
+      description: Shown by Home Assistant's Bluetooth integration or a BLE scanner app. Mask the part after the dash if you prefer.
+      placeholder: "Walle-8856A6******"
+
+  - type: textarea
+    id: details
+    attributes:
+      label: What happens?
+      description: Does the device get discovered? Does setup fail, and with which error?
+    validations:
+      required: true

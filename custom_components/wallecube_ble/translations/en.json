@@ -1,0 +1,212 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "abort": {
+      "already_configured": "Device is already configured",
+      "not_supported": "Device is not supported",
+      "no_devices_found": "No unconfigured WalleCube devices found"
+    },
+    "error": {
+      "unknown": "An unexpected error occurred, check the logs for details",
+      "bt_timeout": "Could not connect to the device - connection timed out",
+      "bt_not_found": "Device was not found - try refreshing the bluetooth integration if this error occurs repeatedly",
+      "bt_general_error": "Could not connect to the device - see the logs for more details",
+      "session_key_failed": "Connected, but could not establish the encrypted session with the device",
+      "unsupported_protocol": "Device does not expose the expected Bluetooth characteristics, it may run unsupported firmware",
+      "error_try_refresh": "Device disconnected before the session was established, try again"
+    },
+    "step": {
+      "bluetooth_confirm": {
+        "title": "Discovered Device Configuration",
+        "description": "Set up {name}?",
+        "data": {
+          "update_period": "Update Period"
+        },
+        "data_description": {
+          "update_period": "Number of seconds to wait before processing the next device update. Value of 0 means all updates are processed immediately (will result in a high number of database writes)."
+        },
+        "sections": {
+          "log_options": {
+            "name": "Logging Options",
+            "description": "Detailed logging options. Most of these will flood your logs, so avoid leaving them enabled for long periods.",
+            "data": {
+              "log_masked": "Mask sensitive information (useful when sharing logs publicly)",
+              "log_connection": "Log device connection details",
+              "log_messages": "Log decoded telemetry messages",
+              "log_packets": "Log raw telemetry frames",
+              "log_encrypted_payloads": "Log encrypted payloads",
+              "log_payloads": "Log decrypted payloads",
+              "log_bleak": "Enable bleak debug log level (not masked and not filtered to this device)"
+            }
+          },
+          "advanced_connection_options": {
+            "name": "Advanced connection options",
+            "description": "These options affect the Bluetooth connection behavior. Only change them if you are experiencing connectivity issues.",
+            "data": {
+              "connection_timeout": "Connection timeout",
+              "bluez_start_notify": "Use BlueZ start notify"
+            },
+            "data_description": {
+              "connection_timeout": "Number of seconds to wait for the device to connect and establish the session.",
+              "bluez_start_notify": "Try enabling this if you experience frequent disconnects when multiple BLE devices are connected, or if you see `AcquireNotify: Read error` / `Unexpected EOF on notification file handle` in your logs."
+            }
+          }
+        }
+      },
+      "user": {
+        "title": "Pick a WalleCube device",
+        "data": {
+          "address": "BLE Device"
+        }
+      },
+      "device_confirm": {
+        "title": "Device Configuration",
+        "description": "Set up {name}?",
+        "data": {
+          "update_period": "Update Period"
+        },
+        "data_description": {
+          "update_period": "Number of seconds to wait before processing the next device update. Value of 0 means all updates are processed immediately (will result in a high number of database writes)."
+        },
+        "sections": {
+          "log_options": {
+            "name": "Logging Options",
+            "description": "Detailed logging options. Most of these will flood your logs, so avoid leaving them enabled for long periods.",
+            "data": {
+              "log_masked": "Mask sensitive information (useful when sharing logs publicly)",
+              "log_connection": "Log device connection details",
+              "log_messages": "Log decoded telemetry messages",
+              "log_packets": "Log raw telemetry frames",
+              "log_encrypted_payloads": "Log encrypted payloads",
+              "log_payloads": "Log decrypted payloads",
+              "log_bleak": "Enable bleak debug log level (not masked and not filtered to this device)"
+            }
+          },
+          "advanced_connection_options": {
+            "name": "Advanced connection options",
+            "description": "These options affect the Bluetooth connection behavior. Only change them if you are experiencing connectivity issues.",
+            "data": {
+              "connection_timeout": "Connection timeout",
+              "bluez_start_notify": "Use BlueZ start notify"
+            },
+            "data_description": {
+              "connection_timeout": "Number of seconds to wait for the device to connect and establish the session.",
+              "bluez_start_notify": "Try enabling this if you experience frequent disconnects when multiple BLE devices are connected, or if you see `AcquireNotify: Read error` / `Unexpected EOF on notification file handle` in your logs."
+            }
+          }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options for {device_name}",
+        "data": {
+          "update_period": "Update Period"
+        },
+        "data_description": {
+          "update_period": "Number of seconds to wait before processing the next device update. Value of 0 means all updates are processed immediately (will result in a high number of database writes)."
+        },
+        "sections": {
+          "diagnostics_options": {
+            "name": "Diagnostics",
+            "description": "Configure diagnostics data collection.",
+            "data": {
+              "collect_packets": "Enable packet collection",
+              "collect_packets_amount": "Number of packets to store"
+            },
+            "data_description": {
+              "collect_packets": "Store raw frames exchanged with the device in the diagnostics download - wait a minute after enabling before downloading diagnostics and turn it off afterwards. Device addresses are masked."
+            }
+          },
+          "log_options": {
+            "name": "Logging Options",
+            "description": "Detailed logging options. Most of these will flood your logs, so avoid leaving them enabled for long periods.",
+            "data": {
+              "log_masked": "Mask sensitive information (useful when sharing logs publicly)",
+              "log_connection": "Log device connection details",
+              "log_messages": "Log decoded telemetry messages",
+              "log_packets": "Log raw telemetry frames",
+              "log_encrypted_payloads": "Log encrypted payloads",
+              "log_payloads": "Log decrypted payloads",
+              "log_bleak": "Enable bleak debug log level (not masked and not filtered to this device)"
+            }
+          },
+          "advanced_connection_options": {
+            "name": "Advanced connection options",
+            "description": "These options affect the Bluetooth connection behavior. Only change them if you are experiencing connectivity issues.",
+            "data": {
+              "connection_timeout": "Connection timeout",
+              "bluez_start_notify": "Use BlueZ start notify"
+            },
+            "data_description": {
+              "connection_timeout": "Number of seconds to wait for the device to connect and establish the session.",
+              "bluez_start_notify": "Try enabling this if you experience frequent disconnects when multiple BLE devices are connected, or if you see `AcquireNotify: Read error` / `Unexpected EOF on notification file handle` in your logs."
+            }
+          }
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_error": {
+      "message": "Unknown error: {error}"
+    },
+    "unable_to_create_device": {
+      "message": "Unable to create WalleCube BLE device"
+    },
+    "device_not_present": {
+      "message": "WalleCube BLE device not present"
+    },
+    "could_not_connect": {
+      "message": "Could not connect to the device after {time} seconds, check the logs.\nError message: {error_msg}"
+    },
+    "session_key_failed": {
+      "message": "Could not establish the encrypted session with the device"
+    },
+    "unsupported_protocol": {
+      "message": "Device does not expose the expected Bluetooth characteristics: {error_msg}"
+    },
+    "could_not_connect_no_retry": {
+      "message": "Could not connect to device after {attempts} unsuccessful attempts"
+    },
+    "failed_after_successful_connection": {
+      "message": "Device connected but the session was not established, last state: {last_state}"
+    }
+  },
+  "issues": {
+    "max_connection_attempts_reached": {
+      "title": "Could not connect to {device_name} after {attempts} unsuccessful attempts",
+      "description": "Failed to connect to {device_name} after {attempts} unsuccessful attempts. Check the logs for more info.\n\nAutomatic retry was disabled to not spam logs, the integration has to be reloaded manually. This error clears after a successful connection."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_level": {
+        "name": "Battery Level"
+      },
+      "battery_current": {
+        "name": "Battery Current"
+      },
+      "dc_input_voltage": {
+        "name": "DC Input Voltage"
+      },
+      "dc_output_voltage": {
+        "name": "DC Output Voltage"
+      },
+      "dc_output_current": {
+        "name": "DC Output Current"
+      },
+      "output_power": {
+        "name": "Output Power"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "remaining_time_discharging": {
+        "name": "Discharge Time Remaining"
+      }
+    }
+  }
+}
