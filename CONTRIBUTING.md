@@ -126,6 +126,7 @@ custom_components/wallecube_ble/
 ├── __init__.py            # HA integration entry point
 ├── config_flow.py         # Discovery and options flows
 ├── binary_sensor.py       # Status flag entities
+├── brand/                 # Official WalleCube icon and logo, shown by HA 2026.3+
 ├── number.py              # Numeric settings
 ├── select.py              # Option settings
 ├── sensor.py              # Measurement entities
