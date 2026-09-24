@@ -152,10 +152,15 @@ positive values mean charging, but it is not confirmed on hardware.
 `0x01` on the sample where it returns and `0x00` otherwise. The vendor app labels `0x01`
 "PowerDown" and `0x02` "PowerOn", the opposite of what the firmware logic implies.
 
-**Remaining time**: the front panel shows payload offset 26 divided by 60 as minutes, but
-only while status bit 8 is set and the value is between 31 s and about 16.7 hours. The
-vendor app reads its "remaining seconds" from offset 24 instead. Which one is the runtime
-estimate has not been checked on hardware.
+**Remaining time**: the front panel shows payload offset 26 divided by 60 as minutes. It
+does so only under all of these conditions:
+
+- status bit 8 is set;
+- at least 30 s have passed since input power was lost or returned;
+- the value is between 31 s and about 16.7 hours.
+
+The vendor app reads its "remaining seconds" from offset 24 instead. Which one is the
+runtime estimate has not been checked on hardware.
 
 **Total energy consumed**: the vendor app divides the raw value by 10⁶. The app shows
 energy statistics in kWh, which suggests the raw unit is mWh. This is not confirmed.
@@ -187,7 +192,8 @@ authoritative copy of both.
 Payload layouts below follow the headers from [Frame formats](#frame-formats). Adapter
 and standby settings are forwarded to the power board; the other settings are stored in
 the front panel's flash and take effect immediately. Values outside the listed ranges
-are clamped by the device, not rejected. Defaults are the values after a factory reset.
+are clamped by the device, not rejected, unless noted otherwise. Defaults are the values
+after a factory reset.
 
 The vendor app exposes no switch for the DC output, and none of the mapped commands
 below switches it. The only unmapped command is `0xF0B7`.
@@ -205,7 +211,8 @@ below switches it. The only unmapped command is `0xF0B7`.
 | `0xF0B8` language | u8: 0 English, 1 Simplified Chinese | u8 | 0 |
 | `0xF0B9` temperature unit | u8: 0 °C, 1 °F | u8 | 0 |
 
-Values other than 0 and 1 written to `0xF0B8` or `0xF0B9` are stored as 0. In repeat
+Values other than 0 and 1 written to `0xF0B8` or `0xF0B9` are stored as 0. The buzzer
+byte is stored as written. In repeat
 mode the buzzer beeps every 2.5 s while status flag bit 10 is clear; the vendor app calls
 that bit "AC OK".
 
@@ -269,9 +276,13 @@ After the screen timeout expires without interaction, the screen switches to its
 view at the idle backlight level. Defaults: timeout 300 s, both backlight levels 70 %.
 
 The **Wake-on-LAN trigger** makes the UPS send magic packets to the stored targets over
-its network connection after an outage: u16 outage time (s, at least 10) before the outage counts, u16
-delay (s, at least 10) after input power returns, u16 minimum battery level (%, 20-80)
-for sending. Defaults: 30 s, 30 s, 35 %.
+its network connection after an outage. Its payload is three u16 values:
+
+- outage time before the outage counts (s, at least 10);
+- delay after input power returns (s, at least 10);
+- minimum battery level for sending (%, 20-80).
+
+Defaults: 30 s, 30 s, 35 %.
 
 Types `0x03` and `0x10` exist in the firmware but are not used by the vendor app.
 
