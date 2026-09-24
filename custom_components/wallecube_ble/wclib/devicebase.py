@@ -77,7 +77,7 @@ class DeviceBase(abc.ABC):
         self._wait_until_throttle: float | None = 0
 
         self._reconnect_disabled = False
-        self._tasks: set[asyncio.Task] = set()
+        self._refresh_task: asyncio.Task | None = None
         self._options = Connection.Options()
         self._connection_log = ConnectionLog()
         self._diagnostics = DeviceDiagnosticsCollector(self)
@@ -224,9 +224,7 @@ class DeviceBase(abc.ABC):
             self._logger.error("Device has no connection")
             return
 
-        for task in self._tasks:
-            task.cancel()
-        self._tasks.clear()
+        self._cancel_refresh()
         await self._conn.disconnect()
         self._connection_event.clear()
         self._conn = None
@@ -270,15 +268,24 @@ class DeviceBase(abc.ABC):
         # disconnected, so they are read again after every connect
         if state is not ConnectionState.AUTHENTICATED:
             return
-        task = asyncio.get_running_loop().create_task(self._refresh_settings())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        # a reconnect can authenticate again while the previous refresh still waits
+        # on the dropped link
+        self._cancel_refresh()
+        self._refresh_task = asyncio.get_running_loop().create_task(
+            self._refresh_settings()
+        )
+
+    def _cancel_refresh(self) -> None:
+        if self._refresh_task is not None:
+            self._refresh_task.cancel()
+            self._refresh_task = None
 
     async def _refresh_settings(self) -> None:
         try:
             await self.refresh_settings()
         except Exception as e:  # noqa: BLE001
             self._logger.warning("Could not read device settings: %s", e)
+            self._logger.debug("Settings refresh failed", exc_info=True)
 
     def on_disconnect(self, listener: DisconnectListener):
         """

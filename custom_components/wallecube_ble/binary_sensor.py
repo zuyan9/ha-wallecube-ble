@@ -9,7 +9,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DeviceConfigEntry
@@ -101,24 +101,8 @@ class WalleCubeBinarySensor(WalleCubeEntity, BinarySensorEntity):
     def __init__(self, device: DeviceBase, sensor: str):
         super().__init__(device)
 
-        self._sensor = sensor
         self._attr_unique_id = f"wc_{device.identifier}_{sensor}"
-        self._attr_is_on = getattr(device, sensor, None)
         self.entity_description = BINARY_SENSOR_TYPES[sensor]
         if self.entity_description.translation_key is None:
             self._attr_translation_key = self.entity_description.key
-
-    async def async_added_to_hass(self):
-        """Run when this Entity has been added to HA"""
-        self._device.register_state_update_callback(self.state_updated, self._sensor)
-        await super().async_added_to_hass()
-
-    async def async_will_remove_from_hass(self):
-        """Entity being removed from hass"""
-        self._device.remove_state_update_callback(self.state_updated, self._sensor)
-        await super().async_will_remove_from_hass()
-
-    @callback
-    def state_updated(self, state: bool | None):
-        self._attr_is_on = state
-        self.async_write_ha_state()
+        self._register_update_callback("_attr_is_on", sensor)

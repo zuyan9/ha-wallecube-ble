@@ -30,10 +30,14 @@ _SETTING_ERRORS = (
 
 class WalleCubeEntity(Entity):
     _attr_has_entity_name = True
+    # state is pushed from device callbacks, polling would only bypass the update
+    # period throttle
+    _attr_should_poll = False
 
     def __init__(self, device: DeviceBase):
         self._device = device
         self._update_callbacks: list[tuple[str, Callable[[Any], None]]] = []
+        self._initial_states: list[Callable[[], None]] = []
 
     @property
     def device_info(self):
@@ -64,10 +68,13 @@ class WalleCubeEntity(Entity):
         if prop_name is None or not hasattr(self._device, prop_name):
             return
 
-        if (state := getattr(self._device, prop_name, None)) is not None:
-            setattr(self, entity_attr, get_state(state))
-        else:
-            setattr(self, entity_attr, default_state)
+        def load_current_state():
+            if (state := getattr(self._device, prop_name, None)) is not None:
+                state = get_state(state)
+                if state is not WalleCubeEntity.SkipWrite:
+                    setattr(self, entity_attr, state)
+            else:
+                setattr(self, entity_attr, default_state)
 
         @callback
         def state_updated(state: Any):
@@ -76,6 +83,8 @@ class WalleCubeEntity(Entity):
             setattr(self, entity_attr, state)
             self.async_write_ha_state()
 
+        load_current_state()
+        self._initial_states.append(load_current_state)
         self._update_callbacks.append((prop_name, state_updated))
 
     async def _change_setting[*Ts](
@@ -94,6 +103,10 @@ class WalleCubeEntity(Entity):
     async def async_added_to_hass(self) -> None:
         for prop, state_callback in self._update_callbacks:
             self._device.register_state_update_callback(state_callback, prop)
+        # values published between construction and subscription, e.g. by the
+        # settings read after connecting, would otherwise be missed until they change
+        for load_current_state in self._initial_states:
+            load_current_state()
         await super().async_added_to_hass()
 
     async def async_will_remove_from_hass(self) -> None:

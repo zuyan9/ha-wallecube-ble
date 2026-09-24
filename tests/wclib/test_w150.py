@@ -1,3 +1,4 @@
+import asyncio
 import struct
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -7,6 +8,7 @@ from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib import NewDevice
 from custom_components.wallecube_ble.wclib.connection import (
+    TELEMETRY_CHARACTERISTIC_UUID,
     UPS_SERVICE_UUID,
     ConnectionState,
 )
@@ -182,14 +184,14 @@ async def test_rejects_frame_without_payload(device: Device):
         await device.data_parse(b"\x51\x00")
 
 
-async def test_connect_and_notifications_update_fields(
-    device: Device, mocker: MockerFixture
-):
+@pytest.fixture
+def client(mocker: MockerFixture):
     info = SessionCipher(derive_session_key(bytes.fromhex("8856a600c4bc"))).encrypt(
         bytes.fromhex("5100 0301 0200 0300 1300")
     )
     client = MagicMock(is_connected=True)
     client.read_gatt_char = AsyncMock(return_value=bytearray(info))
+    client.write_gatt_char = AsyncMock()
     client.start_notify = AsyncMock()
     client.disconnect = AsyncMock()
     client.services.get_characteristic = MagicMock(
@@ -199,16 +201,34 @@ async def test_connect_and_notifications_update_fields(
         "custom_components.wallecube_ble.wclib.connection.establish_connection",
         new=AsyncMock(return_value=client),
     )
+    return client
+
+
+def telemetry_handler(client):
+    for args in client.start_notify.await_args_list:
+        if args.args[0].uuid == TELEMETRY_CHARACTERISTIC_UUID:
+            return args.args[1]
+    raise AssertionError("telemetry was not subscribed")
+
+
+async def test_connect_and_notifications_update_fields(
+    device: Device, client, mocker: MockerFixture
+):
+    # settings reads have their own tests, keep this one to the telemetry path
+    refresh = mocker.patch.object(device, "refresh_settings", new=AsyncMock())
     battery_callback = mocker.Mock()
     device.register_callback(battery_callback, "battery_level")
     device.with_enabled_packet_diagnostics()
 
     await device.with_disabled_reconnect().connect()
     state = await device.wait_until_authenticated_or_error()
-    handler = client.start_notify.await_args.args[1]
-    await handler(None, bytearray(telemetry_frame(status_flags=ON_BATTERY)))
+    await device._refresh_task
+    await telemetry_handler(client)(
+        None, bytearray(telemetry_frame(status_flags=ON_BATTERY))
+    )
 
     assert state is ConnectionState.AUTHENTICATED
+    refresh.assert_awaited_once()
     assert device.battery_level == 87.5
     assert device.remaining_time_discharging == 121
     battery_callback.assert_called_once()
@@ -218,3 +238,60 @@ async def test_connect_and_notifications_update_fields(
     assert diagnostics["session"]["from_advertised_name"] is True
     assert len(diagnostics["frames_received"]) == 2
     assert "8856a600c4bc" not in str(diagnostics).lower()
+
+
+async def test_disconnect_cancels_running_settings_refresh(
+    device: Device, client, mocker: MockerFixture
+):
+    started = asyncio.Event()
+
+    async def slow_refresh():
+        started.set()
+        await asyncio.Event().wait()
+
+    mocker.patch.object(device, "refresh_settings", side_effect=slow_refresh)
+
+    await device.with_disabled_reconnect().connect()
+    await started.wait()
+    task = device._refresh_task
+    await device.disconnect()
+
+    assert task is not None
+    assert task.cancelled() or task.cancelling()
+    assert device._refresh_task is None
+
+
+async def test_new_session_replaces_pending_settings_refresh(
+    device: Device, client, mocker: MockerFixture
+):
+    started = asyncio.Event()
+
+    async def slow_refresh():
+        started.set()
+        await asyncio.Event().wait()
+
+    mocker.patch.object(device, "refresh_settings", side_effect=slow_refresh)
+    await device.with_disabled_reconnect().connect()
+    await started.wait()
+    first = device._refresh_task
+
+    device._on_connection_state(ConnectionState.AUTHENTICATED)
+    await asyncio.sleep(0)
+
+    assert first is not None
+    assert first.cancelled()
+    assert device._refresh_task is not first
+    await device.disconnect()
+
+
+async def test_failing_settings_refresh_does_not_break_the_connection(
+    device: Device, client, mocker: MockerFixture
+):
+    mocker.patch.object(
+        device, "refresh_settings", new=AsyncMock(side_effect=RuntimeError("boom"))
+    )
+
+    await device.with_disabled_reconnect().connect()
+    await device._refresh_task
+
+    assert device.connection_state is ConnectionState.AUTHENTICATED

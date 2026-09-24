@@ -13,8 +13,9 @@ entities from them, so adding a control needs no platform code.
 
 import dataclasses
 import enum
+import functools
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, dataclass_transform
+from typing import TYPE_CHECKING, Any, cast, dataclass_transform
 
 if TYPE_CHECKING:
     from .devicebase import DeviceBase
@@ -35,7 +36,8 @@ class ControlType:
     def key(self) -> str:
         return self.field.public_name
 
-    def __init_subclass__(cls) -> None:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
         dataclasses.dataclass(cls)
 
     def _register(self) -> None:
@@ -72,12 +74,15 @@ class NumberType(ControlType):
     def __call__[F: Callable[..., Awaitable[None]]](self, func: F) -> F:
         control = self
 
+        # the device method itself is replaced, so direct library calls get the same
+        # limits as Home Assistant
+        @functools.wraps(func)
         async def _clamped(device: "DeviceBase", value: float) -> None:
             await func(device, min(max(value, control.min), control.max))
 
         self.set_value_func = _clamped
         self._register()
-        return func
+        return cast("F", _clamped)
 
 
 class duration(NumberType):
@@ -113,14 +118,15 @@ class select[E: enum.IntEnum](ControlType):
     def __call__[F: Callable[..., Awaitable[None]]](self, func: F) -> F:
         options = self.options
 
+        @functools.wraps(func)
         async def _from_option(device: "DeviceBase", value: E | str) -> None:
-            if isinstance(value, str):
-                value = options[value.upper()]
-            await func(device, value)
+            await func(
+                device, options[value.upper()] if isinstance(value, str) else value
+            )
 
         self.set_value_func = _from_option
         self._register()
-        return func
+        return cast("F", _from_option)
 
 
 def option_name(option: enum.IntEnum) -> str:
