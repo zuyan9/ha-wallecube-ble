@@ -22,12 +22,22 @@ class Device(DeviceBase, RawDataProps):
     NAME_PREFIX = "W150-"
 
     battery_level = raw_field(tele.battery_level, pdiv(10, 1))
+    battery_voltage = raw_field(tele.battery_voltage, pdiv(1000, 3))
     battery_current = raw_field(tele.battery_current, pdiv(1000, 3))
     dc_input_voltage = raw_field(tele.dc_input_voltage, pdiv(1000, 3))
+    dc_input_current = raw_field(tele.dc_input_current, pdiv(1000, 3))
     dc_output_voltage = raw_field(tele.dc_output_voltage, pdiv(1000, 3))
     dc_output_current = raw_field(tele.dc_output_current, pdiv(1000, 3))
     temperature = raw_field(tele.temperature, pdiv(10, 1))
+    energy_total = raw_field(tele.energy_total, pdiv(1_000_000, 3))
     status_flags = raw_field(tele.status_flags)
+
+    # status flag names follow the vendor app
+    overload = raw_field(tele.status_flags, prop_has_bit_on(2))
+    shutdown_imminent = raw_field(tele.status_flags, prop_has_bit_on(4))
+    charging = raw_field(tele.status_flags, prop_has_bit_on(7))
+    discharging = raw_field(tele.status_flags, _on_battery)
+    input_power_ok = raw_field(tele.status_flags, prop_has_bit_on(10))
 
     output_power = Field[float]()
     remaining_time_discharging = Field[int]()

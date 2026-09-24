@@ -42,6 +42,7 @@ from .wclib.exceptions import (
 from .wclib.logging_util import LogOptions
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
     Platform.SENSOR,
 ]
 

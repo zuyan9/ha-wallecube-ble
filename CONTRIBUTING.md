@@ -117,7 +117,8 @@ Most rules are enforced by `ruff`. Conventions that are not:
 custom_components/wallecube_ble/
 ├── __init__.py            # HA integration entry point
 ├── config_flow.py         # Discovery and options flows
-├── sensor.py              # Entity platform
+├── binary_sensor.py       # Status flag entities
+├── sensor.py              # Measurement entities
 ├── translations/          # User-facing strings
 └── wclib/                 # Home Assistant-independent device library
     ├── devices/           # One module per device model

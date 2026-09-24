@@ -41,19 +41,23 @@ pairing with the vendor app or account is needed.
 
 <br>
 
-| *Sensors*                           |
-|-------------------------------------|
-| Battery Level                       |
-| Battery Current                     |
-| DC Input Voltage                    |
-| DC Output Voltage                   |
-| DC Output Current                   |
-| Output Power                        |
-| Temperature                         |
-| Discharge Time Remaining            |
+| *Sensors*                           | *Binary Sensors*                    |
+|-------------------------------------|-------------------------------------|
+| Battery Level                       | Input Power                         |
+| Battery Voltage                     | Charging                            |
+| Battery Current                     | Discharging                         |
+| DC Input Voltage                    | Overload                            |
+| DC Input Current                    | Shutdown Imminent                   |
+| DC Output Voltage                   |                                     |
+| DC Output Current                   |                                     |
+| Output Power                        |                                     |
+| Temperature                         |                                     |
+| Discharge Time Remaining            |                                     |
+| Total Energy Consumed *(disabled)*  |                                     |
 
 > **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
-> The sign convention of Battery Current (charging vs. discharging) is not confirmed yet.
+> The sign convention of Battery Current (charging vs. discharging) and the unit of Total
+> Energy Consumed are not confirmed yet.
 
 </details>
 
