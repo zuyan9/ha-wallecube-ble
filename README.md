@@ -85,17 +85,12 @@ English, 简体中文 and Русский.
 
 > [!CAUTION]
 > **No Warranty • Use at Your Own Risk**
->
-> - This is an **unofficial integration**, not affiliated with WalleCube in any way
-> - It is provided without warranty of any kind, and the author takes no responsibility
->   for device behavior or damage
-> - Do not rely on it as the only safeguard for critical equipment
+
 
 > [!WARNING]
 > **Firmware Updates May Break This Integration**
 >
-> The integration relies on a reverse-engineered Bluetooth protocol. Future firmware
-> updates may change it.
+> The integration relies on Bluetooth protocol. Future firmware updates may change it.
 
 ---
 
@@ -104,7 +99,8 @@ English, 简体中文 and Русский.
 ### Prerequisites
 
 - Home Assistant 2025.2 or newer with Bluetooth support (a local adapter or an
-  [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) in range)
+  [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) in range).
+  The WalleCube icon and logo show in the UI from Home Assistant 2026.3
 - [HACS](https://hacs.xyz/) installed (recommended method)
 
 ### Method 1: HACS Installation (Recommended)
@@ -141,15 +137,14 @@ or add it manually with **Add Integration → WalleCube BLE**.
 
 ## Development
 
-### Reverse Engineering
+### BLE Protocol
 
 The Bluetooth protocol - advertising, GATT layout, session key derivation, frame formats
 and the telemetry layout - is documented in [docs/ble-protocol.md](docs/ble-protocol.md).
 
 ### Contributing
 
-Contributions are welcome! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** first - it
-covers development setup, running tests, code style, and the PR workflow.
+Contributions are welcome! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 To report wrong or missing values, enable packet collection in the integration options,
 reproduce the situation and attach the diagnostics download to your issue. Device
@@ -157,9 +152,6 @@ addresses are masked in it.
 
 ---
 
-## Legal
-
-> **This repository is not for sale.**
 
 ### Purpose & Motivation
 
@@ -167,8 +159,4 @@ A UPS matters most when the network is down - which is exactly when a cloud-conn
 cannot reach it. This integration keeps monitoring local and independent of vendor
 servers.
 
-### Declaration
 
-This work is provided to improve local control and resilience of equipment you own. The
-protocol was studied for interoperability only, and there is **no intention to harm** any
-individual or entity.
