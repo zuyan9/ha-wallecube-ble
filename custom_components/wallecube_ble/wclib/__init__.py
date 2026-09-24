@@ -3,8 +3,9 @@
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from . import devices
+from . import controls, devices
 from .devicebase import DeviceBase
+from .props import UpdatableProps
 
 
 def NewDevice(ble_dev: BLEDevice, adv_data: AdvertisementData) -> DeviceBase | None:
@@ -17,7 +18,18 @@ def NewDevice(ble_dev: BLEDevice, adv_data: AdvertisementData) -> DeviceBase | N
     return None
 
 
+def get_controls[C: controls.ControlType](
+    device: DeviceBase, control_type: type[C]
+) -> list[C]:
+    """Return the controls of the given type the device declares"""
+    if not isinstance(device, UpdatableProps):
+        return []
+    return device.get_controls(control_type)
+
+
 __all__ = [
     "DeviceBase",
     "NewDevice",
+    "controls",
+    "get_controls",
 ]

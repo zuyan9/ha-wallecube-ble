@@ -34,6 +34,57 @@ def decode_response(plaintext: bytes) -> bytes:
     return plaintext[1:]
 
 
+CONFIG_TYPE_FLAG = 0x40
+CONFIG_NONCE_SIZE = 2
+
+
+def encode_config_message(
+    token: int, message_type: int, payload: bytes = b"", *, nonce: bytes | None = None
+) -> bytes:
+    """
+    Build the plaintext of a message written to the configuration characteristic
+
+    The configuration channel uses its own header: the message type tagged with
+    `0x40`, the payload length and a nonce the device ignores, followed by the session
+    token. The result has to be encrypted with the session cipher before writing.
+    """
+    if nonce is None:
+        nonce = os.urandom(CONFIG_NONCE_SIZE)
+    if len(nonce) != CONFIG_NONCE_SIZE:
+        raise ValueError(f"Nonce must be {CONFIG_NONCE_SIZE} bytes, got {len(nonce)}")
+    return (
+        bytes([CONFIG_TYPE_FLAG | message_type, len(payload)])
+        + nonce
+        + token.to_bytes(4, "little")
+        + payload
+    )
+
+
+@dataclass(frozen=True)
+class ConfigMessage:
+    """Decrypted message received on the configuration characteristic"""
+
+    HEADER_SIZE: ClassVar[int] = 8
+
+    message_type: int
+    token: int
+    payload: bytes
+
+    @classmethod
+    def from_bytes(cls, plaintext: bytes) -> Self:
+        if (
+            len(plaintext) < cls.HEADER_SIZE
+            or plaintext[0] & 0xC0 != CONFIG_TYPE_FLAG
+            or len(plaintext) < cls.HEADER_SIZE + plaintext[1]
+        ):
+            raise PacketParseError(f"Unexpected configuration frame: {plaintext.hex()}")
+        return cls(
+            message_type=plaintext[0] & 0x3F,
+            token=int.from_bytes(plaintext[4:8], "little"),
+            payload=plaintext[cls.HEADER_SIZE : cls.HEADER_SIZE + plaintext[1]],
+        )
+
+
 @dataclass(frozen=True)
 class TelemetryFrame:
     """

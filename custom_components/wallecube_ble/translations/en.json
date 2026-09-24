@@ -173,6 +173,9 @@
     },
     "failed_after_successful_connection": {
       "message": "Device connected but the session was not established, last state: {last_state}"
+    },
+    "setting_failed": {
+      "message": "Could not change the setting: {error}"
     }
   },
   "issues": {
@@ -197,6 +200,47 @@
       },
       "shutdown_imminent": {
         "name": "Shutdown Imminent"
+      }
+    },
+    "number": {
+      "adapter_voltage": {
+        "name": "Adapter Voltage"
+      },
+      "adapter_current": {
+        "name": "Adapter Current"
+      },
+      "standby_time": {
+        "name": "Sleep Time"
+      },
+      "standby_current_threshold": {
+        "name": "Sleep Min Current"
+      },
+      "screen_timeout": {
+        "name": "Screen Timeout"
+      }
+    },
+    "select": {
+      "temperature_unit": {
+        "name": "Temperature Unit",
+        "state": {
+          "celsius": "Celsius (°C)",
+          "fahrenheit": "Fahrenheit (°F)"
+        }
+      },
+      "screen_language": {
+        "name": "Screen Language",
+        "state": {
+          "english": "English",
+          "chinese": "中文"
+        }
+      },
+      "buzzer_mode": {
+        "name": "Buzzer",
+        "state": {
+          "mute": "Mute",
+          "once": "Beep Once",
+          "repeat": "Repeat"
+        }
       }
     },
     "sensor": {
@@ -232,6 +276,11 @@
       },
       "energy_total": {
         "name": "Total Energy Consumed"
+      }
+    },
+    "switch": {
+      "screen_always_on": {
+        "name": "Keep Screen On"
       }
     }
   }

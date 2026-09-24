@@ -24,6 +24,7 @@ from .logging_util import (
     DeviceLogger,
     LogOptions,
 )
+from .packet import ConfigMessage
 from .props.updatable_props import Field
 
 # first messages after connecting are passed through immediately even when an update
@@ -76,6 +77,7 @@ class DeviceBase(abc.ABC):
         self._wait_until_throttle: float | None = 0
 
         self._reconnect_disabled = False
+        self._tasks: set[asyncio.Task] = set()
         self._options = Connection.Options()
         self._connection_log = ConnectionLog()
         self._diagnostics = DeviceDiagnosticsCollector(self)
@@ -185,6 +187,13 @@ class DeviceBase(abc.ABC):
         """Parse a telemetry frame and update fields, return True if processed"""
         return False
 
+    async def config_parse(self, message: ConfigMessage) -> bool:
+        """Parse a configuration-channel message, return True if processed"""
+        return False
+
+    async def refresh_settings(self) -> None:
+        """Read the device settings, called after every successful connection"""
+
     async def connect(self, max_attempts: int | None = None) -> None:
         if self._conn is None:
             self._conn = (
@@ -192,6 +201,7 @@ class DeviceBase(abc.ABC):
                     ble_dev=self._ble_dev,
                     data_parse=self.data_parse,
                     base_mac_hint=self._base_mac_hint,
+                    config_parse=self.config_parse,
                 )
                 .with_logging_options(self._logger.options)
                 .with_disabled_reconnect(self._reconnect_disabled)
@@ -205,6 +215,7 @@ class DeviceBase(abc.ABC):
             self._conn.on_state_change(self._connection_log.append)
             self._conn.on_data_received(self._listeners.on_data_received)
             self._conn.on_data_send(self._listeners.on_data_send)
+            self._conn.on_state_change(self._on_connection_state)
 
         await self._conn.connect(max_attempts=max_attempts)
 
@@ -213,6 +224,9 @@ class DeviceBase(abc.ABC):
             self._logger.error("Device has no connection")
             return
 
+        for task in self._tasks:
+            task.cancel()
+        self._tasks.clear()
         await self._conn.disconnect()
         self._connection_event.clear()
         self._conn = None
@@ -245,6 +259,26 @@ class DeviceBase(abc.ABC):
         if self._conn is None:
             raise ConnectionError("Device has no connection")
         await self._conn.send_command(characteristic, payload)
+
+    async def send_config(self, message_type: int, payload: bytes = b"") -> None:
+        if self._conn is None:
+            raise ConnectionError("Device has no connection")
+        await self._conn.send_config(message_type, payload)
+
+    def _on_connection_state(self, state: ConnectionState) -> None:
+        # settings can change from the device menu or the vendor app while HA is
+        # disconnected, so they are read again after every connect
+        if state is not ConnectionState.AUTHENTICATED:
+            return
+        task = asyncio.get_running_loop().create_task(self._refresh_settings())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _refresh_settings(self) -> None:
+        try:
+            await self.refresh_settings()
+        except Exception as e:  # noqa: BLE001
+            self._logger.warning("Could not read device settings: %s", e)
 
     def on_disconnect(self, listener: DisconnectListener):
         """

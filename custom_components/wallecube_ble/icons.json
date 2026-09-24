@@ -8,12 +8,53 @@
         "default": "mdi:power-plug-off-outline"
       }
     },
+    "number": {
+      "adapter_voltage": {
+        "default": "mdi:power-plug-outline"
+      },
+      "adapter_current": {
+        "default": "mdi:power-plug-outline"
+      },
+      "standby_time": {
+        "default": "mdi:sleep"
+      },
+      "standby_current_threshold": {
+        "default": "mdi:current-dc"
+      },
+      "screen_timeout": {
+        "default": "mdi:monitor-off"
+      }
+    },
+    "select": {
+      "temperature_unit": {
+        "default": "mdi:thermometer"
+      },
+      "screen_language": {
+        "default": "mdi:translate"
+      },
+      "buzzer_mode": {
+        "default": "mdi:volume-high",
+        "state": {
+          "mute": "mdi:volume-off",
+          "once": "mdi:bell-ring-outline",
+          "repeat": "mdi:bell-alert-outline"
+        }
+      }
+    },
     "sensor": {
       "battery_current": {
         "default": "mdi:current-dc"
       },
       "remaining_time_discharging": {
         "default": "mdi:battery-clock-outline"
+      }
+    },
+    "switch": {
+      "screen_always_on": {
+        "default": "mdi:monitor",
+        "state": {
+          "off": "mdi:monitor-off"
+        }
       }
     }
   }

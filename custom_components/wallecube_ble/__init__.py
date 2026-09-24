@@ -43,7 +43,10 @@ from .wclib.logging_util import LogOptions
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.NUMBER,
+    Platform.SELECT,
     Platform.SENSOR,
+    Platform.SWITCH,
 ]
 
 type DeviceConfigEntry = ConfigEntry[wclib.DeviceBase]

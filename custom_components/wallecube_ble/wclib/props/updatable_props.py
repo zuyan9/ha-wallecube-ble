@@ -1,5 +1,8 @@
 from collections.abc import Callable
-from typing import Any, ClassVar, overload
+from typing import TYPE_CHECKING, Any, ClassVar, overload
+
+if TYPE_CHECKING:
+    from ..controls import ControlType
 
 
 class UpdatableProps:
@@ -36,6 +39,14 @@ class UpdatableProps:
     def set_value(self, field: "Field[Any] | str", value: Any):
         setattr(self, field.public_name if isinstance(field, Field) else field, value)
 
+    def get_controls[C: "ControlType"](self, control_type: type[C]) -> list[C]:
+        """Return the controls of the given type declared on this device's fields"""
+        return [
+            f.control
+            for f in self._fields
+            if f.control is not None and isinstance(f.control, control_type)
+        ]
+
     def __str__(self) -> str:
         cls = f"{self.__class__.__module__}.{self.__class__.__name__}"
         lines = [f"  {f.public_name}: {self.get_value(f)!r}" for f in self._fields]
@@ -51,6 +62,7 @@ class Field[T]:
 
     public_name: str
     private_name: str
+    control: "ControlType | None" = None
 
     def __init__(self, transform: Callable[[Any], Any] | None = None) -> None:
         self._transform = transform if transform is not None else _identity

@@ -41,23 +41,32 @@ pairing with the vendor app or account is needed.
 
 <br>
 
-| *Sensors*                           | *Binary Sensors*                    |
-|-------------------------------------|-------------------------------------|
-| Battery Level                       | Input Power                         |
-| Battery Voltage                     | Charging                            |
-| Battery Current                     | Discharging                         |
-| DC Input Voltage                    | Overload                            |
-| DC Input Current                    | Shutdown Imminent                   |
-| DC Output Voltage                   |                                     |
-| DC Output Current                   |                                     |
-| Output Power                        |                                     |
-| Temperature                         |                                     |
-| Discharge Time Remaining            |                                     |
-| Total Energy Consumed *(disabled)*  |                                     |
+| *Sensors*                          | *Binary Sensors*  | *Controls*                     |
+|------------------------------------|-------------------|--------------------------------|
+| Battery Level                      | Input Power       | Buzzer                         |
+| Battery Voltage                    | Charging          | Screen Language                |
+| Battery Current                    | Discharging       | Temperature Unit               |
+| DC Input Voltage                   | Overload          | Screen Timeout                 |
+| DC Input Current                   | Shutdown Imminent | Keep Screen On                 |
+| DC Output Voltage                  |                   | Sleep Time                     |
+| DC Output Current                  |                   | Sleep Min Current              |
+| Output Power                       |                   | Adapter Voltage *(disabled)*   |
+| Temperature                        |                   | Adapter Current *(disabled)*   |
+| Discharge Time Remaining           |                   |                                |
+| Total Energy Consumed *(disabled)* |                   |                                |
 
 > **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
 > The sign convention of Battery Current (charging vs. discharging) and the unit of Total
 > Energy Consumed are not confirmed yet.
+
+The controls mirror the vendor app's advanced configuration page and use its wording in
+English, 简体中文 and Русский.
+
+> **⚠️ Warning:** Adapter Voltage and Adapter Current must match the label of the power
+> adapter feeding the UPS; wrong values can stop the battery from charging. As in the
+> app, the other adapter limits are derived from them, and the UPS applies the change only
+> after you gently press the reset hole on the front panel. Both entities are disabled
+> by default.
 
 </details>
 
@@ -65,8 +74,8 @@ pairing with the vendor app or account is needed.
 
 > [!NOTE]
 > Other WalleCube models that advertise as `Walle-…` (e.g. the W120, which uses the same
-> front-panel board) may work but are untested. Controls (buzzer, screen, standby and adapter settings)
-> are not implemented yet. Please
+> front-panel board) may work but are untested. Wake-on-LAN targets, Wi-Fi setup and the
+> system reset of the vendor app are not implemented yet. Please
 > [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if you can
 > help test another model.
 
