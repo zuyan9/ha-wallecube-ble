@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from bleak.exc import BleakError
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib.connection import (
@@ -216,3 +217,38 @@ async def test_send_config_writes_config_frame(establish, client):
     assert plaintext[:2] == b"\x4b\x04"
     assert int.from_bytes(plaintext[4:8], "little") == session_key.token
     assert plaintext[8:12] == b"\x58\x02\x00\x00"
+
+
+async def test_telemetry_is_subscribed_before_config(establish, client):
+    conn = make_connection(config_parse=AsyncMock())
+
+    await conn.connect()
+
+    subscribed = [args.args[0].uuid for args in client.start_notify.await_args_list]
+    assert subscribed == [TELEMETRY_CHARACTERISTIC_UUID, CONFIG_CHARACTERISTIC_UUID]
+
+
+async def test_connects_without_config_characteristic(establish, client):
+    client.services.get_characteristic.side_effect = lambda uuid: (
+        None if uuid == CONFIG_CHARACTERISTIC_UUID else SimpleNamespace(uuid=uuid)
+    )
+    conn = make_connection(config_parse=AsyncMock())
+
+    await conn.connect()
+
+    assert conn.state is ConnectionState.AUTHENTICATED
+    client.start_notify.assert_awaited_once()
+
+
+async def test_failed_config_subscription_keeps_telemetry(establish, client):
+    async def start_notify(characteristic, handler, **kwargs):
+        if characteristic.uuid == CONFIG_CHARACTERISTIC_UUID:
+            raise BleakError("NotSupported")
+
+    client.start_notify.side_effect = start_notify
+    conn = make_connection(config_parse=AsyncMock())
+
+    await conn.connect()
+
+    assert conn.state is ConnectionState.AUTHENTICATED
+    assert notify_handler(client, TELEMETRY_CHARACTERISTIC_UUID) is not None

@@ -1,7 +1,10 @@
+import asyncio
 import enum
 import struct
 
+from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from bleak.exc import BleakError
 
 from .. import controls
 from ..connection import (
@@ -97,6 +100,13 @@ class Device(DeviceBase, RawDataProps):
     _warned_truncated = False
     _last_screen_timeout = DEFAULT_SCREEN_TIMEOUT
 
+    def __init__(self, ble_dev: BLEDevice, adv_data: AdvertisementData) -> None:
+        super().__init__(ble_dev, adv_data)
+        # adapter and standby values are written as whole blocks, so changes of two
+        # values in one block must not interleave or one of them is lost
+        self._adapter_lock = asyncio.Lock()
+        self._standby_lock = asyncio.Lock()
+
     @classmethod
     def check(cls, adv_data: AdvertisementData) -> bool:
         local_name = adv_data.local_name or ""
@@ -157,10 +167,16 @@ class Device(DeviceBase, RawDataProps):
             self._request_screen_timeout,
         )
         for read in readers:
-            # older firmware lacks some settings, the others are still usable
+            # older firmware lacks some settings and a single read can fail, the
+            # others are still usable
             try:
                 await read()
             except (UnsupportedBluetoothProtocol, PacketParseError) as e:
+                self._logger.warning("Could not read setting: %s", e)
+            except (BleakError, TimeoutError) as e:
+                if not self.is_connected:
+                    self._logger.debug("Connection lost while reading settings")
+                    return
                 self._logger.warning("Could not read setting: %s", e)
 
     @controls.voltage(adapter_voltage, min=5.0, max=20.2, step=0.1, enabled=False)
@@ -208,35 +224,36 @@ class Device(DeviceBase, RawDataProps):
         self, *, voltage: float | None = None, current: float | None = None
     ) -> None:
         # the device stores all limits at once and the vendor app derives three of
-        # them, so a change of either rating rewrites the whole block
-        if self.adapter_voltage is None or self.adapter_current is None:
+        # them, so a change of either rating rewrites the whole block. Reading first
+        # keeps a change made on the device or in the app meanwhile.
+        async with self._adapter_lock:
             await self._read_adapter()
-        voltage = voltage if voltage is not None else self.adapter_voltage
-        current = current if current is not None else self.adapter_current
-        if voltage is None or current is None:
-            raise SettingUnavailable("Current adapter settings could not be read")
+            voltage = voltage if voltage is not None else self.adapter_voltage
+            current = current if current is not None else self.adapter_current
+            if voltage is None or current is None:
+                raise SettingUnavailable("Current adapter settings could not be read")
 
-        settings = AdapterSettings.from_adapter(voltage, current)
-        await self.send_command(ADAPTER_CHARACTERISTIC_UUID, settings.to_bytes())
-        await self._read_adapter()
+            settings = AdapterSettings.from_adapter(voltage, current)
+            await self.send_command(ADAPTER_CHARACTERISTIC_UUID, settings.to_bytes())
+            await self._read_adapter()
 
     async def _write_standby(
         self, *, time: int | None = None, current_threshold: int | None = None
     ) -> None:
-        if self.standby_time is None or self.standby_current_threshold is None:
+        async with self._standby_lock:
             await self._read_standby()
-        time = time if time is not None else self.standby_time
-        current_threshold = (
-            current_threshold
-            if current_threshold is not None
-            else self.standby_current_threshold
-        )
-        if time is None or current_threshold is None:
-            raise SettingUnavailable("Current standby settings could not be read")
+            time = time if time is not None else self.standby_time
+            current_threshold = (
+                current_threshold
+                if current_threshold is not None
+                else self.standby_current_threshold
+            )
+            if time is None or current_threshold is None:
+                raise SettingUnavailable("Current standby settings could not be read")
 
-        settings = StandbySettings(time=time, current_threshold=current_threshold)
-        await self.send_command(STANDBY_CHARACTERISTIC_UUID, settings.to_bytes())
-        await self._read_standby()
+            settings = StandbySettings(time=time, current_threshold=current_threshold)
+            await self.send_command(STANDBY_CHARACTERISTIC_UUID, settings.to_bytes())
+            await self._read_standby()
 
     async def _write_screen_timeout(self, seconds: int) -> None:
         # a 4-byte payload leaves the idle backlight level unchanged

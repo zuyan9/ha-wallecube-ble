@@ -1,7 +1,9 @@
+import asyncio
 import struct
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, call
 
 import pytest
+from bleak.exc import BleakError
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib import controls, get_controls
@@ -50,10 +52,13 @@ def settings(device: Device, mocker: MockerFixture):
         TEMPERATURE_UNIT_CHARACTERISTIC_UUID: b"\x00" + bytes(14),
     }
 
+    # every call yields like a real GATT round trip, so concurrent changes interleave
     async def read_value(characteristic: str) -> bytes:
+        await asyncio.sleep(0)
         return values[characteristic]
 
     async def send_command(characteristic: str, payload: bytes = b"") -> None:
+        await asyncio.sleep(0)
         values[characteristic] = payload + bytes(15 - len(payload))
 
     mocker.patch.object(device, "read_value", side_effect=read_value)
@@ -150,8 +155,10 @@ async def test_select_writes_option_value(device: Device, settings):
 
 
 async def test_unknown_select_value_reads_as_none(device: Device, settings):
-    settings[LANGUAGE_CHARACTERISTIC_UUID] = b"\x07" + bytes(14)
+    await device.refresh_settings()
+    assert device.screen_language is ScreenLanguage.ENGLISH
 
+    settings[LANGUAGE_CHARACTERISTIC_UUID] = b"\x07" + bytes(14)
     await device.refresh_settings()
 
     assert device.screen_language is None
@@ -240,3 +247,75 @@ async def test_ignores_other_config_messages(device: Device):
     message = ConfigMessage(message_type=0x0A, token=0, payload=bytes(6))
 
     assert await device.config_parse(message) is False
+
+
+async def test_concurrent_changes_of_one_block_keep_both_values(
+    device: Device, settings
+):
+    await asyncio.gather(
+        device.set_standby_time(600), device.set_standby_current_threshold(250)
+    )
+
+    assert settings[STANDBY_CHARACTERISTIC_UUID][:4] == struct.pack("<2H", 600, 250)
+    assert (device.standby_time, device.standby_current_threshold) == (600, 250)
+
+
+async def test_block_change_keeps_values_changed_on_the_device(
+    device: Device, settings
+):
+    await device.refresh_settings()
+    # changed in the vendor app while HA stays connected
+    settings[STANDBY_CHARACTERISTIC_UUID] = struct.pack("<2H", 300, 500) + bytes(11)
+
+    await device.set_standby_time(120)
+
+    assert settings[STANDBY_CHARACTERISTIC_UUID][:4] == struct.pack("<2H", 120, 500)
+
+
+async def test_direct_setter_calls_are_clamped_and_accept_option_names(
+    device: Device, settings
+):
+    await device.set_adapter_voltage(50)
+    await device.set_buzzer_mode("mute")
+
+    assert device.adapter_voltage == 20.2
+    assert device.buzzer_mode is BuzzerMode.MUTE
+
+
+def test_select_control_type_can_be_subscripted():
+    assert controls.select[BuzzerMode] is not None
+
+
+async def test_refresh_continues_after_a_failed_read_while_connected(
+    device: Device, settings, mocker: MockerFixture
+):
+    mocker.patch.object(
+        Device, "is_connected", new_callable=PropertyMock, return_value=True
+    )
+    read = device.read_value
+
+    async def read_value(characteristic: str) -> bytes:
+        if characteristic == ADAPTER_CHARACTERISTIC_UUID:
+            raise BleakError("read failed")
+        return await read(characteristic)
+
+    mocker.patch.object(device, "read_value", side_effect=read_value)
+
+    await device.refresh_settings()
+
+    assert device.adapter_voltage is None
+    assert device.buzzer_mode is BuzzerMode.ONCE
+
+
+async def test_refresh_stops_when_the_connection_is_lost(
+    device: Device, settings, mocker: MockerFixture
+):
+    mocker.patch.object(
+        Device, "is_connected", new_callable=PropertyMock, return_value=False
+    )
+    mocker.patch.object(device, "read_value", side_effect=BleakError("disconnected"))
+
+    await device.refresh_settings()
+
+    assert device.read_value.await_count == 1
+    device.send_config.assert_not_awaited()

@@ -60,6 +60,14 @@ uv run pytest tests/wclib
 The library tests run without Home Assistant. Use `uv run pytest -k <name>` for a single
 test. Add tests for protocol changes next to the existing ones in `tests/wclib/`.
 
+Entity tests in `tests/ha/` need Home Assistant and are skipped without it. Some of
+Home Assistant's Bluetooth dependencies are not declared by the `hass` group, so add
+them when running:
+
+```bash
+uv run --with aiohasupervisor --with serialx pytest tests/ha
+```
+
 ### Code style and linting
 
 Style and lint rules are enforced with [`prek`](https://github.com/j178/prek) running the

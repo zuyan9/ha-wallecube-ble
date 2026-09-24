@@ -538,20 +538,25 @@ class Connection:
         if self._options.bluez_start_notify:
             kwargs["bluez"] = {"use_start_notify": True}
 
-        # answers to configuration requests arrive as notifications, telemetry works
-        # without them, so a device lacking the characteristic is not an error
-        if self._config_parse is not None and (
-            config := self._client.services.get_characteristic(
-                CONFIG_CHARACTERISTIC_UUID
-            )
-        ):
-            await self._client.start_notify(config, self._on_config, **kwargs)
-
         await self._client.start_notify(
             self._characteristic(TELEMETRY_CHARACTERISTIC_UUID),
             self._on_telemetry,
             **kwargs,
         )
+
+        # answers to configuration requests arrive as notifications; telemetry works
+        # without them, so a missing or failing subscription only disables the
+        # settings that use the configuration channel
+        if self._config_parse is None:
+            return
+        config = self._client.services.get_characteristic(CONFIG_CHARACTERISTIC_UUID)
+        if config is None:
+            self._logger.warning("Device has no configuration characteristic")
+            return
+        try:
+            await self._client.start_notify(config, self._on_config, **kwargs)
+        except BleakError as e:
+            self._logger.warning("Could not subscribe to configuration messages: %s", e)
 
     async def _on_telemetry(self, _: BleakGATTCharacteristic, data: bytearray) -> None:
         frame = bytes(data)
