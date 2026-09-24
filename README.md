@@ -9,7 +9,7 @@
 
 ---
 
-**Monitor your WalleCube DC UPS locally via Bluetooth**
+**Monitor and Configure your WalleCube UPS locally via Bluetooth**
 
 No cloud account • No internet connection required • Real-time status updates
 
@@ -81,19 +81,6 @@ English, 简体中文 and Русский.
 
 ---
 
-## Support & Warranty
-
-> [!CAUTION]
-> **No Warranty • Use at Your Own Risk**
-
-
-> [!WARNING]
-> **Firmware Updates May Break This Integration**
->
-> The integration relies on Bluetooth protocol. Future firmware updates may change it.
-
----
-
 ## Installation
 
 ### Prerequisites
@@ -152,11 +139,21 @@ addresses are masked in it.
 
 ---
 
+## Support & Warranty
+
+> [!CAUTION]
+> **No Warranty • Use at Your Own Risk**
+
+
+> [!WARNING]
+> **Firmware Updates May Break This Integration**
+>
+> The integration relies on Bluetooth protocol. Future firmware updates may change it.
+
+---
 
 ### Purpose & Motivation
 
 A UPS matters most when the network is down - which is exactly when a cloud-connected app
 cannot reach it. This integration keeps monitoring local and independent of vendor
 servers.
-
-
