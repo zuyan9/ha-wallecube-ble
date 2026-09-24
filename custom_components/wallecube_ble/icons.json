@@ -1,0 +1,12 @@
+{
+  "entity": {
+    "sensor": {
+      "battery_current": {
+        "default": "mdi:current-dc"
+      },
+      "remaining_time_discharging": {
+        "default": "mdi:battery-clock-outline"
+      }
+    }
+  }
+}

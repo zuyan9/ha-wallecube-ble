@@ -1,0 +1,87 @@
+name: Bug report
+description: Something isn't working as it should (wrong values, crashes, disconnects, errors in the log)
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Before submitting, please make sure
+        you are running the [latest release](https://github.com/zuyan9/ha-wallecube-ble/releases)
+        and search [open issues](https://github.com/zuyan9/ha-wallecube-ble/issues) to avoid
+        duplicates. For wrong or missing sensor values, please use the
+        [sensor template](https://github.com/zuyan9/ha-wallecube-ble/issues/new?template=sensor_request.yaml).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I'm running the latest release and the bug still reproduces
+          required: true
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what you saw and what you expected to see, with steps to reproduce.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      description: Find it in HACS or `custom_components/wallecube_ble/manifest.json`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ha-version
+    attributes:
+      label: Home Assistant version
+      description: Visible in Settings → About.
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device model
+      description: The model printed on the device (e.g. "W150") and the firmware version if you know it.
+      placeholder: "W150"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: bluetooth
+    attributes:
+      label: Bluetooth connection
+      options:
+        - Internal bluetooth adapter
+        - USB dongle
+        - ESPHome bluetooth proxy
+        - Other (describe in "What happened?")
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Enable packet collection in the integration options, wait a minute, then download
+        diagnostics from the device page and attach the file after submitting. Device
+        addresses are masked in the download.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Enable debug logging for `custom_components.wallecube_ble` if the default log level
+        doesn't show anything useful.
+      render: shell

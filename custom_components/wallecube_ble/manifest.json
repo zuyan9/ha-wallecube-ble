@@ -1,0 +1,26 @@
+{
+    "domain": "wallecube_ble",
+    "name": "WalleCube BLE (Unofficial)",
+    "bluetooth": [
+        {
+            "local_name": "Walle-*",
+            "service_uuid": "0000f0a1-0000-1000-8000-00805f9b34fb",
+            "connectable": true
+        }
+    ],
+
+    "codeowners": ["@zuyan9"],
+    "config_flow": true,
+    "dependencies": ["bluetooth_adapters"],
+    "documentation": "https://github.com/zuyan9/ha-wallecube-ble",
+    "integration_type": "device",
+    "iot_class": "local_push",
+    "issue_tracker": "https://github.com/zuyan9/ha-wallecube-ble/issues",
+    "loggers": ["custom_components.wallecube_ble"],
+
+    "requirements": [
+        "PyCryptodome~=3.23"
+    ],
+
+    "version": "0.1.0"
+}

@@ -1,0 +1,187 @@
+import struct
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pytest_mock import MockerFixture
+
+from custom_components.wallecube_ble.wclib import NewDevice
+from custom_components.wallecube_ble.wclib.connection import (
+    UPS_SERVICE_UUID,
+    ConnectionState,
+)
+from custom_components.wallecube_ble.wclib.devices.w150 import Device
+from custom_components.wallecube_ble.wclib.encryption import (
+    SessionCipher,
+    derive_session_key,
+)
+from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
+
+ON_BATTERY = 1 << 8
+
+
+def telemetry_frame(
+    *,
+    input_mv: int = 12_150,
+    output_mv: int = 12_020,
+    output_ma: int = 1_530,
+    battery_permille: int = 875,
+    battery_ma: int = -1_450,
+    temperature_decidegrees: int = 253,
+    remaining_seconds: int = 7_260,
+    status_flags: int = 0,
+) -> bytes:
+    """Build a 40-byte telemetry notification: event word + 38-byte payload"""
+    payload = struct.pack(
+        "<HHHHH10shhHH8sH",
+        input_mv,
+        0,
+        output_mv,
+        output_ma,
+        battery_permille,
+        bytes(10),
+        battery_ma,
+        temperature_decidegrees,
+        0,
+        remaining_seconds,
+        bytes(8),
+        status_flags,
+    )
+    return b"\x92\x80" + payload
+
+
+@pytest.fixture
+def adv_data(mocker: MockerFixture):
+    adv = mocker.MagicMock()
+    adv.local_name = "Walle-8856A600C4BC"
+    adv.service_uuids = [UPS_SERVICE_UUID]
+    return adv
+
+
+@pytest.fixture
+def device(mocker: MockerFixture, adv_data):
+    ble_dev = mocker.Mock()
+    ble_dev.address = "88:56:A6:00:C4:BE"
+    ble_dev.name = adv_data.local_name
+    return Device(ble_dev, adv_data)
+
+
+def test_check_matches_advertised_name_or_service(mocker: MockerFixture):
+    by_name = mocker.MagicMock(local_name="Walle-8856A600C4BC", service_uuids=[])
+    by_service = mocker.MagicMock(local_name=None, service_uuids=[UPS_SERVICE_UUID])
+    other = mocker.MagicMock(local_name="EF-R35ABCD", service_uuids=[])
+
+    assert Device.check(by_name)
+    assert Device.check(by_service)
+    assert not Device.check(other)
+
+
+def test_new_device_creates_w150(mocker: MockerFixture, adv_data):
+    ble_dev = mocker.Mock(address="88:56:A6:00:C4:BE")
+
+    device = NewDevice(ble_dev, adv_data)
+
+    assert isinstance(device, Device)
+    assert device.device == "W150"
+    assert device.name == "W150-C4BE"
+    assert device.base_mac_hint == bytes.fromhex("8856a600c4bc")
+
+
+async def test_parses_telemetry_in_display_units(device: Device):
+    processed = await device.data_parse(telemetry_frame())
+
+    assert processed is True
+    assert device.dc_input_voltage == 12.15
+    assert device.dc_output_voltage == 12.02
+    assert device.dc_output_current == 1.53
+    assert device.output_power == round(12.02 * 1.53, 2)
+    assert device.battery_level == 87.5
+    assert device.battery_current == -1.45
+    assert device.temperature == 25.3
+
+
+async def test_remaining_time_only_while_on_battery(device: Device):
+    await device.data_parse(telemetry_frame(status_flags=0))
+    assert device.remaining_time_discharging is None
+
+    await device.data_parse(telemetry_frame(status_flags=ON_BATTERY))
+    assert device.remaining_time_discharging == 121
+
+
+async def test_notifies_only_changed_fields(device: Device, mocker: MockerFixture):
+    await device.data_parse(telemetry_frame())
+
+    voltage_callback = mocker.Mock()
+    battery_callback = mocker.Mock()
+    device.register_callback(voltage_callback, "dc_output_voltage")
+    device.register_callback(battery_callback, "battery_level")
+
+    await device.data_parse(telemetry_frame(output_mv=11_900))
+
+    voltage_callback.assert_called_once()
+    battery_callback.assert_not_called()
+
+
+async def test_state_update_callback_receives_value(
+    device: Device, mocker: MockerFixture
+):
+    state_callback = mocker.Mock()
+    device.register_state_update_callback(state_callback, "battery_level")
+
+    await device.data_parse(telemetry_frame(battery_permille=1000))
+
+    state_callback.assert_called_once_with(100.0)
+
+
+async def test_decodes_truncated_frame_partially(device: Device):
+    # default ATT MTU limits notifications to 20 bytes
+    await device.data_parse(telemetry_frame()[:20])
+
+    assert device.dc_output_voltage == 12.02
+    assert device.dc_output_current == 1.53
+    assert device.battery_level == 87.5
+    assert device.battery_current is None
+    assert device.remaining_time_discharging is None
+
+
+async def test_rejects_frame_without_payload(device: Device):
+    with pytest.raises(PacketParseError):
+        await device.data_parse(b"\x92\x80")
+
+
+async def test_connect_and_notifications_update_fields(
+    device: Device, mocker: MockerFixture
+):
+    info = SessionCipher(derive_session_key(bytes.fromhex("8856a600c4bc"))).encrypt(
+        bytes.fromhex("5100 0301 0200 0300 1300")
+    )
+    client = MagicMock(is_connected=True)
+    client.read_gatt_char = AsyncMock(return_value=bytearray(info))
+    client.start_notify = AsyncMock()
+    client.disconnect = AsyncMock()
+    client.services.get_characteristic = MagicMock(
+        side_effect=lambda uuid: SimpleNamespace(uuid=uuid)
+    )
+    mocker.patch(
+        "custom_components.wallecube_ble.wclib.connection.establish_connection",
+        new=AsyncMock(return_value=client),
+    )
+    battery_callback = mocker.Mock()
+    device.register_callback(battery_callback, "battery_level")
+    device.with_enabled_packet_diagnostics()
+
+    await device.with_disabled_reconnect().connect()
+    state = await device.wait_until_authenticated_or_error()
+    handler = client.start_notify.await_args.args[1]
+    await handler(None, bytearray(telemetry_frame(status_flags=ON_BATTERY)))
+
+    assert state is ConnectionState.AUTHENTICATED
+    assert device.battery_level == 87.5
+    assert device.remaining_time_discharging == 121
+    battery_callback.assert_called_once()
+
+    diagnostics = device.diagnostics.build_diagnostics_dict()
+    assert diagnostics["address"] == "88:56:A6:**:**:**"
+    assert diagnostics["session"]["from_advertised_name"] is True
+    assert len(diagnostics["frames_received"]) == 2
+    assert "8856a600c4bc" not in str(diagnostics).lower()

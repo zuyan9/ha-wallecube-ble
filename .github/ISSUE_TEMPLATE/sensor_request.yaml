@@ -1,0 +1,29 @@
+name: New / missing / incorrect sensor
+description: A sensor shows a wrong value, or a value shown on the device display is missing
+title: "[Sensor]: "
+labels: ["sensor"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Which value is wrong or missing?
+      description: |
+        Name the sensor and compare it with what the device display or the vendor app shows
+        at the same time (e.g. "DC Output Voltage shows 1.2 V, the display shows 12.0 V").
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Enable packet collection in the integration options, reproduce the situation (e.g.
+        unplug the adapter to run on battery), then download and attach diagnostics.
