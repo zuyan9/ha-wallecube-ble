@@ -272,6 +272,12 @@
       "battery_voltage": {
         "name": "电池电压"
       },
+      "cell_voltage": {
+        "name": "电芯{n}电压"
+      },
+      "cell_voltage_difference": {
+        "name": "最大压差"
+      },
       "battery_current": {
         "name": "电池电流"
       },
@@ -298,6 +304,12 @@
       },
       "energy_total": {
         "name": "总用电量"
+      },
+      "battery_health": {
+        "name": "电池健康度"
+      },
+      "battery_cycles": {
+        "name": "循环次数"
       },
       "power_board_firmware_version": {
         "name": "UPS版本"

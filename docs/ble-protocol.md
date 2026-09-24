@@ -104,6 +104,12 @@ Configuration service (`0xF0C1`), in both directions:
 Writes must be 16-128 bytes after encryption. Requests that read a value are answered
 with a notification on `0xF0C1` in the same format, including the token.
 
+**MTU**: telemetry notifications (40 bytes) and the Wi-Fi status reply (up to 64 bytes)
+need a larger ATT MTU than the default 23. BlueZ and ESPHome Bluetooth proxies exchange
+the MTU when they connect, and so does the vendor app. On a link that keeps the default,
+notifications are cut to 20 bytes: telemetry decodes partially and encrypted replies
+longer than one block are lost.
+
 ## Telemetry
 
 `0xF0B1` notifications are plaintext **40-byte** frames. The front panel receives the
@@ -115,6 +121,8 @@ The **Source** column says where a field's meaning comes from:
 - **firmware**: the front panel uses the field itself: on its screen, for the buzzer or
   for Wake-on-LAN.
 - **app**: only the vendor app's decoder names it.
+- **cloud**: only the vendor cloud names it. The front panel uploads the same 38-byte
+  payload, and the vendor app shows the cloud's values on its battery health page.
 
 | Frame offset | Payload offset | Type | Field | Unit | Source |
 | --- | --- | --- | --- | --- | --- |
@@ -126,13 +134,14 @@ The **Source** column says where a field's meaning comes from:
 | 8 | 6 | u16 | DC output current | mA | firmware |
 | 10 | 8 | u16 | battery level | 0.1 % | firmware |
 | 12 | 10 | u16 | battery voltage | mV | app |
-| 14 | 12 | 8 bytes | unknown | - | - |
+| 14 | 12 | 4 × u16 | cell voltages 1-4 | mV | cloud |
 | 22 | 20 | s16 | battery current | mA | firmware |
 | 24 | 22 | s16 | battery temperature | 0.1 °C | firmware |
 | 26 | 24 | u16 | remaining time (app), see below | s | app |
 | 28 | 26 | u16 | remaining time (screen), see below | s | firmware |
 | 30 | 28 | u32 | total energy consumed | see below | app |
-| 34 | 32 | 4 bytes | unknown | - | - |
+| 34 | 32 | u16 | battery cycle count, see below | - | cloud |
+| 36 | 34 | u16 | battery health, see below | % | cloud |
 | 38 | 36 | u16 | status flags, see below | bitfield | firmware |
 
 Units of the firmware fields follow the front panel's display code:
@@ -167,6 +176,12 @@ runtime estimate has not been checked on hardware.
 
 **Total energy consumed**: the vendor app divides the raw value by 10⁶. The app shows
 energy statistics in kWh, which suggests the raw unit is mWh. This is not confirmed.
+
+**Battery cycles and health**: the four cell voltages add up to the battery voltage in a
+cloud record. The cloud also lists a cycle count and a health percentage, and payload
+offsets 32-35 are the only bytes left for them; which of the two comes first is not
+confirmed. The front panel itself uses none of these fields. The app's balance rating is
+computed by the cloud from the largest difference between the cell voltages.
 
 **Status flags**:
 

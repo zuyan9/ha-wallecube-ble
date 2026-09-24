@@ -272,6 +272,12 @@
       "battery_voltage": {
         "name": "Battery Voltage"
       },
+      "cell_voltage": {
+        "name": "Cell {n} Voltage"
+      },
+      "cell_voltage_difference": {
+        "name": "Max Voltage Difference"
+      },
       "battery_current": {
         "name": "Battery Current"
       },
@@ -298,6 +304,12 @@
       },
       "energy_total": {
         "name": "Total Energy Consumed"
+      },
+      "battery_health": {
+        "name": "Battery Health"
+      },
+      "battery_cycles": {
+        "name": "Number of Cycles"
       },
       "power_board_firmware_version": {
         "name": "UPS Firmware Version"

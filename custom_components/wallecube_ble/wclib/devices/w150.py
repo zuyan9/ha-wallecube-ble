@@ -107,6 +107,13 @@ class Device(DeviceBase, RawDataProps):
     energy_total = raw_field(tele.energy_total, pdiv(1_000_000, 3))
     status_flags = raw_field(tele.status_flags)
 
+    cell_voltage_1 = raw_field(tele.cell_voltage_1, pdiv(1000, 3))
+    cell_voltage_2 = raw_field(tele.cell_voltage_2, pdiv(1000, 3))
+    cell_voltage_3 = raw_field(tele.cell_voltage_3, pdiv(1000, 3))
+    cell_voltage_4 = raw_field(tele.cell_voltage_4, pdiv(1000, 3))
+    battery_cycles = raw_field(tele.battery_cycles)
+    battery_health = raw_field(tele.battery_health)
+
     # status flag names follow the vendor app
     overload = raw_field(tele.status_flags, prop_has_bit_on(2))
     shutdown_imminent = raw_field(tele.status_flags, prop_has_bit_on(4))
@@ -116,6 +123,8 @@ class Device(DeviceBase, RawDataProps):
 
     output_power = Field[float]()
     remaining_time_discharging = Field[int]()
+    # highest minus lowest cell voltage in mV, the vendor app's balance indicator
+    cell_voltage_difference = Field[int]()
     power_event = Field[PowerEvent]()
 
     hardware_version = raw_field(info.hardware_version, _known_version)
@@ -185,6 +194,16 @@ class Device(DeviceBase, RawDataProps):
             self.output_power = round(
                 self.dc_output_voltage * self.dc_output_current, 2
             )
+
+        cells = (
+            telemetry.cell_voltage_1,
+            telemetry.cell_voltage_2,
+            telemetry.cell_voltage_3,
+            telemetry.cell_voltage_4,
+        )
+        self.cell_voltage_difference = (
+            max(cells) - min(cells) if None not in cells else None
+        )
 
         self.remaining_time_discharging = (
             round(telemetry.remaining_time / 60)

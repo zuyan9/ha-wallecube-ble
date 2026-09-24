@@ -46,14 +46,18 @@ pairing with the vendor app or account is needed.
 | Battery Level                      | Input Power       | Power Event | Buzzer                       |
 | Battery Voltage                    | Charging          |             | Screen Language              |
 | Battery Current                    | Discharging       |             | Temperature Unit             |
-| DC Input Voltage                   | Overload          |             | Screen Timeout               |
-| DC Input Current                   | Shutdown Imminent |             | Keep Screen On               |
-| DC Output Voltage                  | Wi-Fi             |             | Screen Brightness            |
-| DC Output Current                  |                   |             | Screen Idle Brightness       |
-| Output Power                       |                   |             | Sleep Time                   |
-| Temperature                        |                   |             | Sleep Min Current            |
-| Discharge Time Remaining           |                   |             | Adapter Voltage *(disabled)* |
-| Total Energy Consumed *(disabled)* |                   |             | Adapter Current *(disabled)* |
+| Cell 1–4 Voltage                   | Overload          |             | Screen Timeout               |
+| Max Voltage Difference             | Shutdown Imminent |             | Keep Screen On               |
+| Battery Health *(disabled)*        | Wi-Fi             |             | Screen Brightness            |
+| Number of Cycles *(disabled)*      |                   |             | Screen Idle Brightness       |
+| DC Input Voltage                   |                   |             | Sleep Time                   |
+| DC Input Current                   |                   |             | Sleep Min Current            |
+| DC Output Voltage                  |                   |             | Adapter Voltage *(disabled)* |
+| DC Output Current                  |                   |             | Adapter Current *(disabled)* |
+| Output Power                       |                   |             |                              |
+| Temperature                        |                   |             |                              |
+| Discharge Time Remaining           |                   |             |                              |
+| Total Energy Consumed *(disabled)* |                   |             |                              |
 | UPS Firmware Version               |                   |             |                              |
 | UPS Hardware Version *(disabled)*  |                   |             |                              |
 | Wi-Fi Signal                       |                   |             |                              |
@@ -61,10 +65,13 @@ pairing with the vendor app or account is needed.
 | IP Address                         |                   |             |                              |
 
 > **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
-> The sign convention of Battery Current (charging vs. discharging) and the unit of Total
-> Energy Consumed are not confirmed yet.
+> The sign convention of Battery Current (charging vs. discharging), the unit of Total
+> Energy Consumed and the position of Battery Health and Number of Cycles in the
+> telemetry are not confirmed yet.
 
-Power Event fires *Power Lost* or *Power Restored* when input power is lost or returns.
+Cell 1–4 Voltage, Max Voltage Difference, Battery Health and Number of Cycles are the
+values of the vendor app's battery health page. Power Event fires *Power Lost* or
+*Power Restored* when input power is lost or returns.
 The Wi-Fi entities show the UPS's own network connection, which the vendor cloud and
 Wake-on-LAN use; they are updated every minute. The device page shows the front panel's
 firmware and hardware versions and the UPS version entities those of the power board,

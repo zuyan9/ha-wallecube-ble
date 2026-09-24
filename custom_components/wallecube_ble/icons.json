@@ -84,6 +84,15 @@
       },
       "wifi_ip_address": {
         "default": "mdi:ip-network-outline"
+      },
+      "cell_voltage_difference": {
+        "default": "mdi:scale-balance"
+      },
+      "battery_health": {
+        "default": "mdi:battery-heart-variant"
+      },
+      "battery_cycles": {
+        "default": "mdi:battery-sync-outline"
       }
     },
     "switch": {
