@@ -203,6 +203,22 @@ async def test_config_notifications_with_foreign_token_are_ignored(establish, cl
     config_parse.assert_not_awaited()
 
 
+async def test_truncated_config_notification_warns_once(establish, client, caplog):
+    config_parse = AsyncMock(return_value=True)
+    conn = make_connection(config_parse=config_parse)
+    await conn.connect()
+    handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
+    # a Wi-Fi status reply cut to 20 bytes by the default ATT MTU
+    frame = config_ciphertext(0x01, bytes(21), 0)[:20]
+
+    await handler(None, bytearray(frame))
+    await handler(None, bytearray(frame))
+
+    config_parse.assert_not_awaited()
+    warnings = [r for r in caplog.records if "MTU" in r.getMessage()]
+    assert len(warnings) == 1
+
+
 async def test_send_config_writes_config_frame(establish, client):
     conn = make_connection(config_parse=AsyncMock())
     await conn.connect()

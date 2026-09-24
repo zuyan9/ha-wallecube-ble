@@ -78,11 +78,12 @@ def voltage(
     *,
     enabled: bool = True,
     precision: int | None = None,
+    unit: UnitOfElectricPotential = UnitOfElectricPotential.VOLT,
     **kwargs: Unpack[_SensorKwargs],
 ) -> WalleCubeSensorEntityDescription:
     return WalleCubeSensorEntityDescription(
         key=key,
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        native_unit_of_measurement=unit,
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=precision,
@@ -153,6 +154,29 @@ def duration(
     )
 
 
+def percentage(
+    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
+) -> WalleCubeSensorEntityDescription:
+    return WalleCubeSensorEntityDescription(
+        key=key,
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=enabled,
+        **kwargs,
+    )
+
+
+def count(
+    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
+) -> WalleCubeSensorEntityDescription:
+    return WalleCubeSensorEntityDescription(
+        key=key,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_registry_enabled_default=enabled,
+        **kwargs,
+    )
+
+
 def signal_strength(
     key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
 ) -> WalleCubeSensorEntityDescription:
@@ -181,6 +205,15 @@ def diagnostic(
 _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "battery_level": battery(),
     "battery_voltage": voltage(precision=2),
+    "cell_voltage_{n}": voltage(
+        precision=3,
+        indexed_range=range(1, 5),
+        translation_key="cell_voltage",
+        translation_placeholders={"n": "{n}"},
+    ),
+    "cell_voltage_difference": voltage(
+        precision=0, unit=UnitOfElectricPotential.MILLIVOLT
+    ),
     "battery_current": current(precision=2),
     "dc_input_voltage": voltage(precision=2),
     "dc_input_current": current(precision=2),
@@ -191,6 +224,9 @@ _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "remaining_time_discharging": duration(),
     # the raw unit is not confirmed on hardware
     "energy_total": energy(enabled=False, precision=3),
+    # the position of both values is not confirmed on hardware
+    "battery_health": percentage(enabled=False),
+    "battery_cycles": count(enabled=False),
     "power_board_firmware_version": diagnostic(),
     "power_board_hardware_version": diagnostic(enabled=False),
     "wifi_rssi": signal_strength(entity_category=EntityCategory.DIAGNOSTIC),

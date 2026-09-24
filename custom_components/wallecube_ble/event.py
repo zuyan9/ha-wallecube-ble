@@ -17,8 +17,8 @@ _EVENTS: Final[dict[str, EventEntityDescription]] = {
     ),
 }
 
-EVENT_TYPES: Final[dict[str, EventEntityDescription]] = (
-    resolve_entity_description_keys(_EVENTS)
+EVENT_TYPES: Final[dict[str, EventEntityDescription]] = resolve_entity_description_keys(
+    _EVENTS
 )
 
 

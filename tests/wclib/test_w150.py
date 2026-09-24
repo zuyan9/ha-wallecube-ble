@@ -30,29 +30,33 @@ def telemetry_frame(
     output_ma: int = 1_530,
     battery_permille: int = 875,
     battery_mv: int = 12_480,
+    cells_mv: tuple[int, int, int, int] = (3_122, 3_118, 3_122, 3_117),
     battery_ma: int = -1_450,
     temperature_decidegrees: int = 253,
     remaining_seconds: int = 7_260,
     energy_raw: int = 1_234_567,
+    cycles: int = 12,
+    health: int = 98,
     status_flags: int = 0,
     event: int = 0,
 ) -> bytes:
     """Build a 40-byte telemetry notification: magic, event byte, 38-byte payload"""
     payload = struct.pack(
-        "<HHHHHH8shhHHI4sH",
+        "<HHHHHH4HhhHHIHHH",
         input_mv,
         input_ma,
         output_mv,
         output_ma,
         battery_permille,
         battery_mv,
-        bytes(8),
+        *cells_mv,
         battery_ma,
         temperature_decidegrees,
         0,
         remaining_seconds,
         energy_raw,
-        bytes(4),
+        cycles,
+        health,
         status_flags,
     )
     assert len(payload) == 38
@@ -117,6 +121,16 @@ async def test_parses_fields_named_by_vendor_app(device: Device):
     assert device.energy_total == 1.235
 
 
+async def test_parses_battery_fields_named_by_vendor_cloud(device: Device):
+    await device.data_parse(telemetry_frame())
+
+    assert device.cell_voltage_1 == 3.122
+    assert device.cell_voltage_4 == 3.117
+    assert device.cell_voltage_difference == 5
+    assert device.battery_cycles == 12
+    assert device.battery_health == 98
+
+
 @pytest.mark.parametrize(
     ("bit", "field_name"),
     [
@@ -178,6 +192,10 @@ async def test_decodes_truncated_frame_partially(device: Device):
     assert device.battery_current is None
     assert device.remaining_time_discharging is None
     assert device.charging is None
+    # the frame ends inside the cell voltages
+    assert device.cell_voltage_3 == 3.122
+    assert device.cell_voltage_4 is None
+    assert device.cell_voltage_difference is None
 
 
 @pytest.mark.parametrize(

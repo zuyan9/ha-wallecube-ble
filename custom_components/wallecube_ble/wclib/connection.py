@@ -32,6 +32,8 @@ from .logging_util import ConnectionLogger, LogOptions
 MAX_RECONNECT_ATTEMPTS = 2
 MAX_ERRORS_BEFORE_RECONNECT = 5
 
+_CIPHER_BLOCK_SIZE = 16
+
 
 def _uuid16(value: int) -> str:
     return f"0000{value:04x}-0000-1000-8000-00805f9b34fb"
@@ -179,6 +181,7 @@ class Connection:
         self._base_mac_offset: int | None = None
         self._base_mac_from_name = False
         self._info: bytes = b""
+        self._warned_truncated_config = False
 
         self._errors = 0
         self._reconnect = True
@@ -579,6 +582,18 @@ class Connection:
         frame = bytes(data)
         self._listeners.on_data_received(frame, self._connection_state)
         if self._cipher is None or self._config_parse is None:
+            return
+
+        # a notification longer than the ATT MTU allows arrives cut off and cannot be
+        # decrypted, e.g. the Wi-Fi status on a link that kept the default MTU
+        if len(frame) % _CIPHER_BLOCK_SIZE:
+            if not self._warned_truncated_config:
+                self._warned_truncated_config = True
+                self._logger.warning(
+                    "Configuration message truncated to %d bytes, the connection MTU "
+                    "is too small to receive it",
+                    len(frame),
+                )
             return
 
         try:
