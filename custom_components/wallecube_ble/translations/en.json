@@ -182,15 +182,38 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "input_power_ok": {
+        "name": "Input Power"
+      },
+      "charging": {
+        "name": "Charging"
+      },
+      "discharging": {
+        "name": "Discharging"
+      },
+      "overload": {
+        "name": "Overload"
+      },
+      "shutdown_imminent": {
+        "name": "Shutdown Imminent"
+      }
+    },
     "sensor": {
       "battery_level": {
         "name": "Battery Level"
+      },
+      "battery_voltage": {
+        "name": "Battery Voltage"
       },
       "battery_current": {
         "name": "Battery Current"
       },
       "dc_input_voltage": {
         "name": "DC Input Voltage"
+      },
+      "dc_input_current": {
+        "name": "DC Input Current"
       },
       "dc_output_voltage": {
         "name": "DC Output Voltage"
@@ -206,6 +229,9 @@
       },
       "remaining_time_discharging": {
         "name": "Discharge Time Remaining"
+      },
+      "energy_total": {
+        "name": "Total Energy Consumed"
       }
     }
   }

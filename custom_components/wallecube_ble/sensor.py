@@ -14,6 +14,7 @@ from homeassistant.const import (
     EntityCategory,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
+    UnitOfEnergy,
     UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
@@ -107,6 +108,24 @@ def current(
     )
 
 
+def energy(
+    key: str = "",
+    *,
+    enabled: bool = True,
+    precision: int | None = None,
+    **kwargs: Unpack[_SensorKwargs],
+) -> WalleCubeSensorEntityDescription:
+    return WalleCubeSensorEntityDescription(
+        key=key,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=precision,
+        entity_registry_enabled_default=enabled,
+        **kwargs,
+    )
+
+
 def temperature(
     key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
 ) -> WalleCubeSensorEntityDescription:
@@ -135,13 +154,17 @@ def duration(
 
 _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "battery_level": battery(),
+    "battery_voltage": voltage(precision=2),
     "battery_current": current(precision=2),
     "dc_input_voltage": voltage(precision=2),
+    "dc_input_current": current(precision=2),
     "dc_output_voltage": voltage(precision=2),
     "dc_output_current": current(precision=2),
     "output_power": power(precision=1),
     "temperature": temperature(),
     "remaining_time_discharging": duration(),
+    # the raw unit is not confirmed on hardware
+    "energy_total": energy(enabled=False, precision=3),
 }
 
 SENSOR_TYPES: Final[dict[str, SensorEntityDescription]] = (

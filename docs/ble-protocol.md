@@ -108,31 +108,69 @@ with a notification on `0xF0C1` in the same format, including the token.
 
 `0xF0B1` notifications are plaintext **40-byte** frames. The front panel receives the
 measurements from the power-board MCU and forwards the 38-byte payload unchanged,
-prefixed with the magic byte `0x51` and an event byte: `0x01` on the sample where input
-power returns, `0x02` on the sample where it is lost and `0x00` otherwise. The front
-panel treats input power as lost while the input voltage is more than about 2 V below
-the output voltage.
+prefixed with the magic byte `0x51` and an event byte. All fields are little-endian.
 
-| Frame offset | Payload offset | Type | Field | Unit |
-| --- | --- | --- | --- | --- |
-| 0 | - | u8 | magic `0x51` | - |
-| 1 | - | u8 | event | - |
-| 2 | 0 | u16 | DC input voltage | mV |
-| 6 | 4 | u16 | DC output voltage | mV |
-| 8 | 6 | u16 | DC output current | mA |
-| 10 | 8 | u16 | battery level | 0.1 % |
-| 22 | 20 | s16 | battery current | mA |
-| 24 | 22 | s16 | temperature | 0.1 °C |
-| 28 | 26 | u16 | remaining time | s |
-| 38 | 36 | u16 | status flags | bitfield |
+The **Source** column says where a field's meaning comes from:
 
-All fields are little-endian; the remaining payload bytes are not used by the front
-panel. Units follow the firmware's display code, which renders voltage, current and power
-with one decimal from these fields and output power as voltage × current. The input
-voltage is identified by the firmware comparing it against the output voltage to detect
-loss of input power. The remaining time is only shown while status flag bit 8 is set,
-i.e. while the output runs on battery. The sign convention of the battery current is not
-confirmed.
+- **firmware**: the front panel uses the field itself: on its screen, for the buzzer or
+  for Wake-on-LAN.
+- **app**: only the vendor app's decoder names it.
+
+| Frame offset | Payload offset | Type | Field | Unit | Source |
+| --- | --- | --- | --- | --- | --- |
+| 0 | - | u8 | magic `0x51` | - | firmware |
+| 1 | - | u8 | event, see below | - | firmware |
+| 2 | 0 | u16 | DC input voltage | mV | firmware |
+| 4 | 2 | u16 | DC input current | mA | app |
+| 6 | 4 | u16 | DC output voltage | mV | firmware |
+| 8 | 6 | u16 | DC output current | mA | firmware |
+| 10 | 8 | u16 | battery level | 0.1 % | firmware |
+| 12 | 10 | u16 | battery voltage | mV | app |
+| 14 | 12 | 8 bytes | unknown | - | - |
+| 22 | 20 | s16 | battery current | mA | firmware |
+| 24 | 22 | s16 | battery temperature | 0.1 °C | firmware |
+| 26 | 24 | u16 | remaining time (app), see below | s | app |
+| 28 | 26 | u16 | remaining time (screen), see below | s | firmware |
+| 30 | 28 | u32 | total energy consumed | see below | app |
+| 34 | 32 | 4 bytes | unknown | - | - |
+| 38 | 36 | u16 | status flags, see below | bitfield | firmware |
+
+Units of the firmware fields follow the front panel's display code:
+
+- Voltage, current and power are shown with one decimal.
+- Output power is computed as output voltage × output current.
+- The front panel treats input power as lost while the input voltage is more than about
+  2 V below the output voltage.
+
+The app fields use the same scaling as the neighboring firmware fields (÷1000 for V
+and A).
+
+The vendor app calls the battery current "charging current". This suggests that
+positive values mean charging, but it is not confirmed on hardware.
+
+**Event byte**: the front panel sends `0x02` on the sample where input power is lost,
+`0x01` on the sample where it returns and `0x00` otherwise. The vendor app labels `0x01`
+"PowerDown" and `0x02` "PowerOn", the opposite of what the firmware logic implies.
+
+**Remaining time**: the front panel shows payload offset 26 divided by 60 as minutes, but
+only while status bit 8 is set and the value is between 31 s and about 16.7 hours. The
+vendor app reads its "remaining seconds" from offset 24 instead. Which one is the runtime
+estimate has not been checked on hardware.
+
+**Total energy consumed**: the vendor app divides the raw value by 10⁶. The app shows
+energy statistics in kWh, which suggests the raw unit is mWh. This is not confirmed.
+
+**Status flags**:
+
+| Bit | Mask | Vendor app name | Front-panel use |
+| --- | --- | --- | --- |
+| 2 | `0x0004` | overload | - |
+| 4 | `0x0010` | shutdown imminent | - |
+| 7 | `0x0080` | charging | charging icon |
+| 8 | `0x0100` | discharging | remaining time shown |
+| 10 | `0x0400` | AC OK (input power present) | power icon; buzzer repeat mode beeps while clear |
+
+The other bits are not used by either.
 
 ## Power-board link
 

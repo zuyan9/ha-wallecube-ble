@@ -23,30 +23,36 @@ ON_BATTERY = 1 << 8
 def telemetry_frame(
     *,
     input_mv: int = 12_150,
+    input_ma: int = 2_210,
     output_mv: int = 12_020,
     output_ma: int = 1_530,
     battery_permille: int = 875,
+    battery_mv: int = 12_480,
     battery_ma: int = -1_450,
     temperature_decidegrees: int = 253,
     remaining_seconds: int = 7_260,
+    energy_raw: int = 1_234_567,
     status_flags: int = 0,
 ) -> bytes:
     """Build a 40-byte telemetry notification: magic, event byte, 38-byte payload"""
     payload = struct.pack(
-        "<HHHHH10shhHH8sH",
+        "<HHHHHH8shhHHI4sH",
         input_mv,
-        0,
+        input_ma,
         output_mv,
         output_ma,
         battery_permille,
-        bytes(10),
+        battery_mv,
+        bytes(8),
         battery_ma,
         temperature_decidegrees,
         0,
         remaining_seconds,
-        bytes(8),
+        energy_raw,
+        bytes(4),
         status_flags,
     )
+    assert len(payload) == 38
     return b"\x51\x00" + payload
 
 
@@ -100,6 +106,32 @@ async def test_parses_telemetry_in_display_units(device: Device):
     assert device.temperature == 25.3
 
 
+async def test_parses_fields_named_by_vendor_app(device: Device):
+    await device.data_parse(telemetry_frame())
+
+    assert device.dc_input_current == 2.21
+    assert device.battery_voltage == 12.48
+    assert device.energy_total == 1.235
+
+
+@pytest.mark.parametrize(
+    ("bit", "field_name"),
+    [
+        (2, "overload"),
+        (4, "shutdown_imminent"),
+        (7, "charging"),
+        (8, "discharging"),
+        (10, "input_power_ok"),
+    ],
+)
+async def test_maps_status_flag_bits(device: Device, bit: int, field_name: str):
+    await device.data_parse(telemetry_frame(status_flags=1 << bit))
+
+    flags = ("overload", "shutdown_imminent", "charging", "discharging")
+    for name in (*flags, "input_power_ok"):
+        assert getattr(device, name) is (name == field_name)
+
+
 async def test_remaining_time_only_while_on_battery(device: Device):
     await device.data_parse(telemetry_frame(status_flags=0))
     assert device.remaining_time_discharging is None
@@ -142,6 +174,7 @@ async def test_decodes_truncated_frame_partially(device: Device):
     assert device.battery_level == 87.5
     assert device.battery_current is None
     assert device.remaining_time_discharging is None
+    assert device.charging is None
 
 
 async def test_rejects_frame_without_payload(device: Device):

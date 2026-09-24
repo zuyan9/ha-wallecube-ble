@@ -1,5 +1,13 @@
 {
   "entity": {
+    "binary_sensor": {
+      "discharging": {
+        "default": "mdi:battery-arrow-down-outline"
+      },
+      "shutdown_imminent": {
+        "default": "mdi:power-plug-off-outline"
+      }
+    },
     "sensor": {
       "battery_current": {
         "default": "mdi:current-dc"
