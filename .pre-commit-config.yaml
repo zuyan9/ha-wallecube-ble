@@ -30,7 +30,7 @@ repos:
         args: [--mapping, "2", --sequence, "4", --offset, "2", --preserve-quotes, "--implicit_start"]
         name: yaml formatting (yamlfmt)
   - repo: https://github.com/rvben/rumdl-pre-commit
-    rev: v0.1.80
+    rev: v0.2.77
     hooks:
       - id: rumdl
       - id: rumdl-fmt
