@@ -200,6 +200,22 @@
       },
       "shutdown_imminent": {
         "name": "Скорое отключение"
+      },
+      "wifi_connected": {
+        "name": "Wi-Fi"
+      }
+    },
+    "event": {
+      "power_event": {
+        "name": "Событие питания",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "power_lost": "Отключение питания",
+              "power_restored": "Восстановление питания"
+            }
+          }
+        }
       }
     },
     "number": {
@@ -217,6 +233,12 @@
       },
       "screen_timeout": {
         "name": "Таймаут экрана"
+      },
+      "screen_brightness": {
+        "name": "Яркость экрана"
+      },
+      "screen_idle_brightness": {
+        "name": "Яркость экрана в простое"
       }
     },
     "select": {
@@ -276,6 +298,21 @@
       },
       "energy_total": {
         "name": "Общее потребление энергии"
+      },
+      "power_board_firmware_version": {
+        "name": "Версия UPS"
+      },
+      "power_board_hardware_version": {
+        "name": "Аппаратная версия UPS"
+      },
+      "wifi_rssi": {
+        "name": "Сигнал Wi-Fi"
+      },
+      "wifi_ssid": {
+        "name": "Сеть Wi-Fi"
+      },
+      "wifi_ip_address": {
+        "name": "IP-адрес"
       }
     },
     "switch": {

@@ -48,6 +48,9 @@ class WalleCubeEntity(Entity):
             name=self._device.name,
             manufacturer=MANUFACTURER,
             model=self._device.device,
+            # versions of the front panel, the power board has its own sensors
+            sw_version=_version(getattr(self._device, "firmware_version", None)),
+            hw_version=_version(getattr(self._device, "hardware_version", None)),
         )
 
     @property
@@ -113,6 +116,10 @@ class WalleCubeEntity(Entity):
         for prop, state_callback in self._update_callbacks:
             self._device.remove_state_update_callback(state_callback, prop)
         await super().async_will_remove_from_hass()
+
+
+def _version(value: int | None) -> str | None:
+    return None if value is None else str(value)
 
 
 @runtime_checkable

@@ -70,6 +70,9 @@ _BINARY_SENSORS: Final[dict[str, BinarySensorEntityDescription]] = {
     "discharging": _make_desc(None),
     "overload": problem(entity_category=EntityCategory.DIAGNOSTIC),
     "shutdown_imminent": problem(entity_category=EntityCategory.DIAGNOSTIC),
+    "wifi_connected": _make_desc(
+        BinarySensorDeviceClass.CONNECTIVITY, entity_category=EntityCategory.DIAGNOSTIC
+    ),
 }
 
 BINARY_SENSOR_TYPES: Final[dict[str, BinarySensorEntityDescription]] = (

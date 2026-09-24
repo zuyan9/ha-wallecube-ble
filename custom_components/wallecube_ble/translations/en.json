@@ -200,6 +200,22 @@
       },
       "shutdown_imminent": {
         "name": "Shutdown Imminent"
+      },
+      "wifi_connected": {
+        "name": "Wi-Fi"
+      }
+    },
+    "event": {
+      "power_event": {
+        "name": "Power Event",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "power_lost": "Power Lost",
+              "power_restored": "Power Restored"
+            }
+          }
+        }
       }
     },
     "number": {
@@ -217,6 +233,12 @@
       },
       "screen_timeout": {
         "name": "Screen Timeout"
+      },
+      "screen_brightness": {
+        "name": "Screen Brightness"
+      },
+      "screen_idle_brightness": {
+        "name": "Screen Idle Brightness"
       }
     },
     "select": {
@@ -276,6 +298,21 @@
       },
       "energy_total": {
         "name": "Total Energy Consumed"
+      },
+      "power_board_firmware_version": {
+        "name": "UPS Firmware Version"
+      },
+      "power_board_hardware_version": {
+        "name": "UPS Hardware Version"
+      },
+      "wifi_rssi": {
+        "name": "Wi-Fi Signal"
+      },
+      "wifi_ssid": {
+        "name": "Wi-Fi Network"
+      },
+      "wifi_ip_address": {
+        "name": "IP Address"
       }
     },
     "switch": {

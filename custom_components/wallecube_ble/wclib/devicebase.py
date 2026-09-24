@@ -3,7 +3,7 @@ import asyncio
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
@@ -43,6 +43,8 @@ class DeviceBase(abc.ABC):
     """Device Base"""
 
     NAME_PREFIX: str
+    # seconds between calls of `poll` while connected, None disables polling
+    POLL_INTERVAL: ClassVar[float | None] = None
 
     _listeners = _Listeners.create()
 
@@ -78,6 +80,7 @@ class DeviceBase(abc.ABC):
 
         self._reconnect_disabled = False
         self._refresh_task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task | None = None
         self._options = Connection.Options()
         self._connection_log = ConnectionLog()
         self._diagnostics = DeviceDiagnosticsCollector(self)
@@ -191,8 +194,14 @@ class DeviceBase(abc.ABC):
         """Parse a configuration-channel message, return True if processed"""
         return False
 
+    def info_parse(self, info: bytes) -> None:
+        """Parse the info block read while establishing the session"""
+
     async def refresh_settings(self) -> None:
         """Read the device settings, called after every successful connection"""
+
+    async def poll(self) -> None:
+        """Request values the device does not push, called every `POLL_INTERVAL`"""
 
     async def connect(self, max_attempts: int | None = None) -> None:
         if self._conn is None:
@@ -224,7 +233,7 @@ class DeviceBase(abc.ABC):
             self._logger.error("Device has no connection")
             return
 
-        self._cancel_refresh()
+        self._cancel_session_tasks()
         await self._conn.disconnect()
         self._connection_event.clear()
         self._conn = None
@@ -268,17 +277,24 @@ class DeviceBase(abc.ABC):
         # disconnected, so they are read again after every connect
         if state is not ConnectionState.AUTHENTICATED:
             return
+        # parsed before the connect call returns, so the versions are known when the
+        # entities are created
+        if self._conn is not None:
+            self.info_parse(self._conn.info)
         # a reconnect can authenticate again while the previous refresh still waits
         # on the dropped link
-        self._cancel_refresh()
-        self._refresh_task = asyncio.get_running_loop().create_task(
-            self._refresh_settings()
-        )
+        self._cancel_session_tasks()
+        loop = asyncio.get_running_loop()
+        self._refresh_task = loop.create_task(self._refresh_settings())
+        if self.POLL_INTERVAL is not None:
+            self._poll_task = loop.create_task(self._poll_periodically())
 
-    def _cancel_refresh(self) -> None:
-        if self._refresh_task is not None:
-            self._refresh_task.cancel()
-            self._refresh_task = None
+    def _cancel_session_tasks(self) -> None:
+        for task in (self._refresh_task, self._poll_task):
+            if task is not None:
+                task.cancel()
+        self._refresh_task = None
+        self._poll_task = None
 
     async def _refresh_settings(self) -> None:
         try:
@@ -286,6 +302,17 @@ class DeviceBase(abc.ABC):
         except Exception as e:  # noqa: BLE001
             self._logger.warning("Could not read device settings: %s", e)
             self._logger.debug("Settings refresh failed", exc_info=True)
+
+    async def _poll_periodically(self) -> None:
+        assert self.POLL_INTERVAL is not None
+        while True:
+            await asyncio.sleep(self.POLL_INTERVAL)
+            if not self.is_connected:
+                return
+            try:
+                await self.poll()
+            except Exception as e:  # noqa: BLE001
+                self._logger.debug("Polling failed: %s", e)
 
     def on_disconnect(self, listener: DisconnectListener):
         """

@@ -101,6 +101,10 @@ class voltage(NumberType):
     """Number in volts"""
 
 
+class percentage(NumberType):
+    """Number in percent"""
+
+
 class select[E: enum.IntEnum](ControlType):
     type SetFunc = Callable[[DeviceBase, Any], Awaitable[None]]
 

@@ -11,7 +11,11 @@ pytest.importorskip("homeassistant.components.bluetooth")
 
 from unittest.mock import MagicMock
 
+from homeassistant.components.number import NumberMode
+from homeassistant.const import PERCENTAGE
+
 from custom_components.wallecube_ble.binary_sensor import WalleCubeBinarySensor
+from custom_components.wallecube_ble.event import EVENT_TYPES, WalleCubeEvent
 from custom_components.wallecube_ble.number import WalleCubeNumber
 from custom_components.wallecube_ble.number import _describe as describe_number
 from custom_components.wallecube_ble.select import WalleCubeSelect
@@ -20,7 +24,11 @@ from custom_components.wallecube_ble.sensor import WalleCubeSensor
 from custom_components.wallecube_ble.switch import WalleCubeSwitch
 from custom_components.wallecube_ble.switch import _describe as describe_switch
 from custom_components.wallecube_ble.wclib import controls, get_controls
-from custom_components.wallecube_ble.wclib.devices.w150 import BuzzerMode, Device
+from custom_components.wallecube_ble.wclib.devices.w150 import (
+    BuzzerMode,
+    Device,
+    PowerEvent,
+)
 
 
 @pytest.fixture
@@ -55,6 +63,7 @@ def test_entities_are_not_polled(device: Device):
             device,
             describe_switch(control(device, controls.switch, "screen_always_on")),
         ),
+        WalleCubeEvent(device, "power_event"),
     ]
 
     assert [entity.should_poll for entity in entities] == [False] * len(entities)
@@ -88,3 +97,53 @@ async def test_updates_after_subscription_reach_the_entity(device: Device):
 
     assert number.native_value == 120
     number.async_write_ha_state.assert_called_once()
+
+
+def test_power_event_types_match_the_device_events():
+    assert set(EVENT_TYPES["power_event"].event_types) == {
+        controls.option_name(event) for event in PowerEvent
+    }
+
+
+async def test_power_event_fires_on_the_event_byte(device: Device):
+    event = WalleCubeEvent(device, "power_event")
+    event.async_write_ha_state = MagicMock()
+    await event.async_added_to_hass()
+
+    # event byte 2 in an otherwise empty telemetry frame
+    await device.data_parse(b"\x51\x02" + bytes(38))
+    await device.data_parse(b"\x51\x00" + bytes(38))
+
+    assert event.state_attributes["event_type"] == "power_lost"
+    event.async_write_ha_state.assert_called_once()
+
+
+async def test_last_power_event_is_not_fired_again_when_added(device: Device):
+    await device.data_parse(b"\x51\x01" + bytes(38))
+    event = WalleCubeEvent(device, "power_event")
+    event.async_write_ha_state = MagicMock()
+
+    await event.async_added_to_hass()
+
+    assert event.state is None
+    event.async_write_ha_state.assert_not_called()
+
+
+def test_device_info_carries_front_panel_versions(device: Device):
+    device.info_parse(bytes.fromhex("00 0300 1d00 0300 1300") + bytes(6))
+
+    info = WalleCubeSensor(device, "power_board_firmware_version").device_info
+
+    assert info["sw_version"] == "19"
+    assert info["hw_version"] == "3"
+
+
+def test_brightness_is_a_percentage_slider(device: Device):
+    number = WalleCubeNumber(
+        device,
+        describe_number(control(device, controls.NumberType, "screen_brightness")),
+    )
+
+    assert number.native_unit_of_measurement == PERCENTAGE
+    assert number.mode is NumberMode.SLIDER
+    assert (number.native_min_value, number.native_max_value) == (20, 100)

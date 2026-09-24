@@ -1,6 +1,7 @@
 import asyncio
 import enum
 import struct
+from collections import defaultdict
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
@@ -22,17 +23,30 @@ from ..exceptions import (
     SettingUnavailable,
     UnsupportedBluetoothProtocol,
 )
-from ..model import AdapterSettings, StandbySettings, UpsTelemetry
+from ..model import (
+    AdapterSettings,
+    InfoBlock,
+    StandbySettings,
+    UpsTelemetry,
+    WifiStatus,
+)
+from ..model.wifi_status import ipv4
 from ..packet import ConfigMessage, TelemetryFrame
 from ..props import Field, dataclass_attr_mapper, raw_field
 from ..props.raw_data_props import RawDataProps
 from ..props.transforms import pdiv, prop_has_bit_on
 
 tele = dataclass_attr_mapper(UpsTelemetry)
+info = dataclass_attr_mapper(InfoBlock)
 
 # set while the output is powered from the battery, the firmware only shows the
 # remaining time in that state
 _on_battery = prop_has_bit_on(8)
+
+
+def _known_version(value: int | None) -> int | None:
+    # 0 means the power board did not report its versions
+    return value or None
 
 
 class BuzzerMode(enum.IntEnum):
@@ -51,9 +65,24 @@ class TemperatureUnit(enum.IntEnum):
     FAHRENHEIT = 1
 
 
+class PowerEvent(enum.IntEnum):
+    """Event byte of a telemetry frame"""
+
+    # the vendor app names the values the other way round, but the firmware sends 2
+    # when it starts the outage timers and 1 when it starts the power-return delay
+    POWER_RESTORED = 1
+    POWER_LOST = 2
+
+
 # configuration-channel message types
+_GET_WIFI_STATUS = 0x01
 _SET_SCREEN_TIMEOUT = 0x0B
 _GET_SCREEN_TIMEOUT = 0x0C
+_SET_SCREEN_BRIGHTNESS = 0x0D
+_GET_SCREEN_BRIGHTNESS = 0x0E
+
+# seconds to wait for the notification that answers a configuration request
+_CONFIG_REPLY_TIMEOUT = 5
 
 # screen timeout the vendor app writes for "keep screen on"
 SCREEN_ALWAYS_ON = 0xFFFFFFFF
@@ -64,6 +93,8 @@ class Device(DeviceBase, RawDataProps):
     """W150"""
 
     NAME_PREFIX = "W150-"
+    # the device reports Wi-Fi changes only when asked
+    POLL_INTERVAL = 60
 
     battery_level = raw_field(tele.battery_level, pdiv(10, 1))
     battery_voltage = raw_field(tele.battery_voltage, pdiv(1000, 3))
@@ -85,6 +116,21 @@ class Device(DeviceBase, RawDataProps):
 
     output_power = Field[float]()
     remaining_time_discharging = Field[int]()
+    power_event = Field[PowerEvent]()
+
+    hardware_version = raw_field(info.hardware_version, _known_version)
+    firmware_version = raw_field(info.firmware_version, _known_version)
+    power_board_hardware_version = raw_field(
+        info.power_board_hardware_version, _known_version
+    )
+    power_board_firmware_version = raw_field(
+        info.power_board_firmware_version, _known_version
+    )
+
+    wifi_connected = Field[bool]()
+    wifi_rssi = Field[int]()
+    wifi_ssid = Field[str]()
+    wifi_ip_address = Field[str]()
 
     # settings, in the order of the vendor app's advanced configuration page
     adapter_voltage = Field[float]()
@@ -96,9 +142,14 @@ class Device(DeviceBase, RawDataProps):
     temperature_unit = Field[TemperatureUnit]()
     screen_language = Field[ScreenLanguage]()
     buzzer_mode = Field[BuzzerMode]()
+    # not in the vendor app
+    screen_brightness = Field[int]()
+    screen_idle_brightness = Field[int]()
 
     _warned_truncated = False
     _last_screen_timeout = DEFAULT_SCREEN_TIMEOUT
+    # as reported, including the value for "keep screen on"
+    _raw_screen_timeout: int | None = None
 
     def __init__(self, ble_dev: BLEDevice, adv_data: AdvertisementData) -> None:
         super().__init__(ble_dev, adv_data)
@@ -106,6 +157,8 @@ class Device(DeviceBase, RawDataProps):
         # values in one block must not interleave or one of them is lost
         self._adapter_lock = asyncio.Lock()
         self._standby_lock = asyncio.Lock()
+        self._screen_lock = asyncio.Lock()
+        self._config_replies: dict[int, list[asyncio.Future[None]]] = defaultdict(list)
 
     @classmethod
     def check(cls, adv_data: AdvertisementData) -> bool:
@@ -139,22 +192,68 @@ class Device(DeviceBase, RawDataProps):
             and _on_battery(telemetry.status_flags)
             else None
         )
+        self.power_event = _power_event(telemetry_frame.event)
 
         self._publish_updates()
         return True
 
+    def info_parse(self, info: bytes) -> None:
+        self.update_from_bytes(InfoBlock, info)
+        self._publish_updates()
+
     async def config_parse(self, message: ConfigMessage) -> bool:
-        if message.message_type != _GET_SCREEN_TIMEOUT or len(message.payload) < 4:
+        parse = {
+            _GET_WIFI_STATUS: self._parse_wifi_status,
+            _GET_SCREEN_TIMEOUT: self._parse_screen_timeout,
+            _GET_SCREEN_BRIGHTNESS: self._parse_screen_brightness,
+        }.get(message.message_type)
+        if parse is None or not parse(message.payload):
             return False
 
-        timeout = int.from_bytes(message.payload[:4], "little")
+        self._publish_updates()
+        for reply in self._config_replies.get(message.message_type, []):
+            if not reply.done():
+                reply.set_result(None)
+        return True
+
+    def _parse_wifi_status(self, payload: bytes) -> bool:
+        status = WifiStatus.from_bytes(payload)
+        if status.connected is None:
+            return False
+
+        self.wifi_connected = bool(status.connected)
+        if not status.connected:
+            self.wifi_rssi = None
+            self.wifi_ssid = None
+            self.wifi_ip_address = None
+            return True
+
+        self.wifi_rssi = status.rssi
+        self.wifi_ip_address = ipv4(status.ip_address)
+        ssid = payload[WifiStatus.SIZE : WifiStatus.SIZE + (status.ssid_length or 0)]
+        self.wifi_ssid = ssid.decode("utf-8", "replace") if ssid else None
+        return True
+
+    def _parse_screen_timeout(self, payload: bytes) -> bool:
+        if len(payload) < 4:
+            return False
+
+        timeout = int.from_bytes(payload[:4], "little")
+        self._raw_screen_timeout = timeout
         self.screen_always_on = timeout == SCREEN_ALWAYS_ON
         if timeout == SCREEN_ALWAYS_ON:
             self.screen_timeout = None
         else:
             self.screen_timeout = timeout
             self._last_screen_timeout = timeout
-        self._publish_updates()
+        if len(payload) >= 5:
+            self.screen_idle_brightness = payload[4]
+        return True
+
+    def _parse_screen_brightness(self, payload: bytes) -> bool:
+        if not payload:
+            return False
+        self.screen_brightness = payload[0]
         return True
 
     async def refresh_settings(self) -> None:
@@ -165,6 +264,8 @@ class Device(DeviceBase, RawDataProps):
             self._read_screen_language,
             self._read_buzzer_mode,
             self._request_screen_timeout,
+            self._request_screen_brightness,
+            self._request_wifi_status,
         )
         for read in readers:
             # older firmware lacks some settings and a single read can fail, the
@@ -178,6 +279,9 @@ class Device(DeviceBase, RawDataProps):
                     self._logger.debug("Connection lost while reading settings")
                     return
                 self._logger.warning("Could not read setting: %s", e)
+
+    async def poll(self) -> None:
+        await self._request_wifi_status()
 
     @controls.voltage(adapter_voltage, min=5.0, max=20.2, step=0.1, enabled=False)
     async def set_adapter_voltage(self, volts: float) -> None:
@@ -204,6 +308,16 @@ class Device(DeviceBase, RawDataProps):
         await self._write_screen_timeout(
             SCREEN_ALWAYS_ON if enabled else self._last_screen_timeout
         )
+
+    @controls.percentage(screen_brightness, min=20, max=100)
+    async def set_screen_brightness(self, percent: float) -> None:
+        await self.send_config(_SET_SCREEN_BRIGHTNESS, bytes([round(percent)]))
+        await self._request_screen_brightness()
+
+    # 0 turns the screen dark once the timeout expires
+    @controls.percentage(screen_idle_brightness, min=0, max=100)
+    async def set_screen_idle_brightness(self, percent: float) -> None:
+        await self._write_screen_idle_brightness(round(percent))
 
     @controls.select(temperature_unit, options=TemperatureUnit)
     async def set_temperature_unit(self, unit: TemperatureUnit) -> None:
@@ -257,8 +371,22 @@ class Device(DeviceBase, RawDataProps):
 
     async def _write_screen_timeout(self, seconds: int) -> None:
         # a 4-byte payload leaves the idle backlight level unchanged
-        await self.send_config(_SET_SCREEN_TIMEOUT, struct.pack("<I", seconds))
-        await self._request_screen_timeout()
+        async with self._screen_lock:
+            await self.send_config(_SET_SCREEN_TIMEOUT, struct.pack("<I", seconds))
+            await self._request_screen_timeout()
+
+    async def _write_screen_idle_brightness(self, percent: int) -> None:
+        # the idle level is only written together with the timeout, so the current
+        # timeout is read first to keep a change made on the device meanwhile
+        async with self._screen_lock:
+            await self._query_config(_GET_SCREEN_TIMEOUT)
+            if self._raw_screen_timeout is None:
+                raise SettingUnavailable("Current screen timeout could not be read")
+            await self.send_config(
+                _SET_SCREEN_TIMEOUT,
+                struct.pack("<IB", self._raw_screen_timeout, percent),
+            )
+            await self._request_screen_timeout()
 
     async def _read_adapter(self) -> None:
         settings = AdapterSettings.from_bytes(
@@ -296,6 +424,23 @@ class Device(DeviceBase, RawDataProps):
         # answered with a notification, see `config_parse`
         await self.send_config(_GET_SCREEN_TIMEOUT)
 
+    async def _request_screen_brightness(self) -> None:
+        await self.send_config(_GET_SCREEN_BRIGHTNESS)
+
+    async def _request_wifi_status(self) -> None:
+        await self.send_config(_GET_WIFI_STATUS)
+
+    async def _query_config(self, message_type: int) -> None:
+        """Send a configuration request and wait until its reply is parsed"""
+        reply = asyncio.get_running_loop().create_future()
+        replies = self._config_replies[message_type]
+        replies.append(reply)
+        try:
+            await self.send_config(message_type)
+            await asyncio.wait_for(reply, _CONFIG_REPLY_TIMEOUT)
+        finally:
+            replies.remove(reply)
+
     async def _read_enum[E: enum.IntEnum](
         self, characteristic: str, enum_type: type[E]
     ):
@@ -319,3 +464,10 @@ class Device(DeviceBase, RawDataProps):
 
 def _scaled(value: int | None, divisor: int) -> float | None:
     return None if value is None else round(value / divisor, 3)
+
+
+def _power_event(value: int) -> PowerEvent | None:
+    try:
+        return PowerEvent(value)
+    except ValueError:
+        return None

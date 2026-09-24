@@ -41,26 +41,39 @@ pairing with the vendor app or account is needed.
 
 <br>
 
-| *Sensors*                          | *Binary Sensors*  | *Controls*                     |
-|------------------------------------|-------------------|--------------------------------|
-| Battery Level                      | Input Power       | Buzzer                         |
-| Battery Voltage                    | Charging          | Screen Language                |
-| Battery Current                    | Discharging       | Temperature Unit               |
-| DC Input Voltage                   | Overload          | Screen Timeout                 |
-| DC Input Current                   | Shutdown Imminent | Keep Screen On                 |
-| DC Output Voltage                  |                   | Sleep Time                     |
-| DC Output Current                  |                   | Sleep Min Current              |
-| Output Power                       |                   | Adapter Voltage *(disabled)*   |
-| Temperature                        |                   | Adapter Current *(disabled)*   |
-| Discharge Time Remaining           |                   |                                |
-| Total Energy Consumed *(disabled)* |                   |                                |
+| *Sensors*                          | *Binary Sensors*  | *Events*    | *Controls*                   |
+|------------------------------------|-------------------|-------------|------------------------------|
+| Battery Level                      | Input Power       | Power Event | Buzzer                       |
+| Battery Voltage                    | Charging          |             | Screen Language              |
+| Battery Current                    | Discharging       |             | Temperature Unit             |
+| DC Input Voltage                   | Overload          |             | Screen Timeout               |
+| DC Input Current                   | Shutdown Imminent |             | Keep Screen On               |
+| DC Output Voltage                  | Wi-Fi             |             | Screen Brightness            |
+| DC Output Current                  |                   |             | Screen Idle Brightness       |
+| Output Power                       |                   |             | Sleep Time                   |
+| Temperature                        |                   |             | Sleep Min Current            |
+| Discharge Time Remaining           |                   |             | Adapter Voltage *(disabled)* |
+| Total Energy Consumed *(disabled)* |                   |             | Adapter Current *(disabled)* |
+| UPS Firmware Version               |                   |             |                              |
+| UPS Hardware Version *(disabled)*  |                   |             |                              |
+| Wi-Fi Signal                       |                   |             |                              |
+| Wi-Fi Network                      |                   |             |                              |
+| IP Address                         |                   |             |                              |
 
 > **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
 > The sign convention of Battery Current (charging vs. discharging) and the unit of Total
 > Energy Consumed are not confirmed yet.
 
+Power Event fires *Power Lost* or *Power Restored* when input power is lost or returns.
+The Wi-Fi entities show the UPS's own network connection, which the vendor cloud and
+Wake-on-LAN use; they are updated every minute. The device page shows the front panel's
+firmware and hardware versions and the UPS version entities those of the power board,
+as the numbers the UPS reports. The vendor app shows them in its own format, e.g.
+firmware 19 as V1.19.
+
 The controls mirror the vendor app's advanced configuration page and use its wording in
-English, 简体中文 and Русский.
+English, 简体中文 and Русский. Screen Brightness and Screen Idle Brightness are not in the
+app: the idle level applies once the screen timeout expires, and 0 turns the screen dark.
 
 > **⚠️ Warning:** Adapter Voltage and Adapter Current must match the label of the power
 > adapter feeding the UPS; wrong values can stop the battery from charging. As in the
