@@ -42,13 +42,28 @@ def test_token_is_big_endian_digest_bytes_8_to_11():
 def test_command_frame_serializes_token_little_endian():
     session_key = derive_session_key(bytes.fromhex("8856a600c4bc"))
 
-    frame = encode_command(session_key.token, b"\x01")
+    frame = encode_command(session_key.token, b"\x01", nonce=b"\xa1\xa2\xa3\xa4")
 
     # the firmware compares the token as a native little-endian word, so the frame
     # carries digest bytes 8-11 in reverse order
     assert frame[:2] == bytes([FRAME_MAGIC, 0x00])
     assert frame[2:6] == session_key.key[8:12][::-1]
-    assert frame[6:] == b"\x01"
+    assert frame[6:10] == b"\xa1\xa2\xa3\xa4"
+    assert frame[10:] == b"\x01"
+
+
+def test_command_frame_places_payload_after_random_nonce():
+    first = encode_command(0x01020304, b"\x02")
+    second = encode_command(0x01020304, b"\x02")
+
+    # the firmware reads the payload at offset 10 regardless of the nonce
+    assert len(first) == len(second) == 11
+    assert first[10:] == second[10:] == b"\x02"
+
+
+def test_command_frame_rejects_wrong_nonce_size():
+    with pytest.raises(ValueError, match="Nonce"):
+        encode_command(0, nonce=b"\x00")
 
 
 def test_cipher_round_trip_zero_pads_to_block_size():

@@ -108,11 +108,11 @@ async def test_telemetry_notifications_are_forwarded(establish, client):
     await conn.connect()
 
     handler = client.start_notify.await_args.args[1]
-    await handler(None, bytearray(b"\x92\x80" + bytes(38)))
+    await handler(None, bytearray(b"\x51\x00" + bytes(38)))
 
-    data_parse.assert_awaited_once_with(b"\x92\x80" + bytes(38))
+    data_parse.assert_awaited_once_with(b"\x51\x00" + bytes(38))
     assert received.call_args.args == (
-        b"\x92\x80" + bytes(38),
+        b"\x51\x00" + bytes(38),
         ConnectionState.AUTHENTICATED,
     )
 
@@ -129,7 +129,7 @@ async def test_send_command_writes_authenticated_frame(establish, client):
     plaintext = SessionCipher(session_key).decrypt(frame)
     assert plaintext[:2] == b"\x51\x00"
     assert int.from_bytes(plaintext[2:6], "little") == session_key.token
-    assert plaintext[6] == 0x01
+    assert plaintext[10] == 0x01
 
 
 async def test_read_value_decrypts_response(establish, client):

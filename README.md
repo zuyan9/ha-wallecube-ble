@@ -61,8 +61,8 @@ pairing with the vendor app or account is needed.
 
 > [!NOTE]
 > Other WalleCube models that advertise as `Walle-…` (e.g. the W120, which uses the same
-> front-panel board) may work but are untested. Controls (output switching, thresholds,
-> buzzer) are not implemented yet. Please
+> front-panel board) may work but are untested. Controls (buzzer, screen, standby and adapter settings)
+> are not implemented yet. Please
 > [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if you can
 > help test another model.
 
