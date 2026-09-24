@@ -144,7 +144,6 @@ addresses are masked in it.
 > [!CAUTION]
 > **No Warranty • Use at Your Own Risk**
 
-
 > [!WARNING]
 > **Firmware Updates May Break This Integration**
 >
