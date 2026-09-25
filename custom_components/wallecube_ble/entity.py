@@ -13,6 +13,7 @@ from .wclib import DeviceBase
 from .wclib.exceptions import (
     PacketParseError,
     SessionKeyError,
+    SettingNotConfirmed,
     SettingUnavailable,
     UnsupportedBluetoothProtocol,
 )
@@ -23,6 +24,7 @@ _SETTING_ERRORS = (
     TimeoutError,
     PacketParseError,
     SessionKeyError,
+    SettingNotConfirmed,
     SettingUnavailable,
     UnsupportedBluetoothProtocol,
 )

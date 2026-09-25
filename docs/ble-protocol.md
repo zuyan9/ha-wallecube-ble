@@ -137,11 +137,10 @@ The **Source** column says where a field's meaning comes from:
 | 14 | 12 | 4 × u16 | cell voltages 1-4 | mV | cloud |
 | 22 | 20 | s16 | battery current | mA | firmware |
 | 24 | 22 | s16 | battery temperature | 0.1 °C | firmware |
-| 26 | 24 | u16 | remaining time (app), see below | s | app |
-| 28 | 26 | u16 | remaining time (screen), see below | s | firmware |
+| 26 | 24 | u16 | battery cycle count, see below | - | cloud |
+| 28 | 26 | u16 | remaining time, see below | s | firmware |
 | 30 | 28 | u32 | total energy consumed | see below | app |
-| 34 | 32 | u16 | battery cycle count, see below | - | cloud |
-| 36 | 34 | u16 | battery health, see below | % | cloud |
+| 34 | 32 | 4 bytes | not used, see below | - | - |
 | 38 | 36 | u16 | status flags, see below | bitfield | firmware |
 
 Units of the firmware fields follow the front panel's display code:
@@ -171,17 +170,20 @@ does so only under all of these conditions:
 - at least 30 s have passed since input power was lost or returned;
 - the value is between 31 s and about 16.7 hours.
 
-The vendor app reads its "remaining seconds" from offset 24 instead. Which one is the
-runtime estimate has not been checked on hardware.
+The vendor cloud reads its remaining seconds from offset 26 as well. The vendor app's
+decoder reads them from offset 24, which the cloud treats as the battery cycle count.
 
 **Total energy consumed**: the vendor app divides the raw value by 10⁶. The app shows
 energy statistics in kWh, which suggests the raw unit is mWh. This is not confirmed.
 
-**Battery cycles and health**: the four cell voltages add up to the battery voltage in a
-cloud record. The cloud also lists a cycle count and a health percentage, and payload
-offsets 32-35 are the only bytes left for them; which of the two comes first is not
-confirmed. The front panel itself uses none of these fields. The app's balance rating is
-computed by the cloud from the largest difference between the cell voltages.
+**Battery cycles and health**: the vendor cloud reads the cycle count from payload
+offset 24. The frame carries no health value: the cloud estimates it from the cycle count
+as min(100, (1500 - cycles) / 14) %, and the vendor app's battery health page shows that
+estimate. Neither the front panel nor the app's own decoder reads the cycle count, so its
+position rests on the cloud alone and is not confirmed on hardware. The app's decoder
+reads offsets 32-35 as a 32-bit value but does not use it; the front panel and the cloud
+ignore them too. The app's balance rating is computed by the cloud from the largest
+difference between the cell voltages.
 
 **Status flags**:
 
@@ -203,7 +205,7 @@ CRC-16/X.25 (polynomial 0x1021 reflected, init 0xFFFF, final XOR 0xFFFF) over ev
 before the CRC. The power board replies with the command byte it received. The front
 panel polls telemetry with command `0x01`. At boot it reads the adapter settings
 (`0x03`) and standby settings (`0x07`) from the power board, so the power board holds the
-authoritative copy of both.
+authoritative copy of both. Changes are forwarded with commands `0x13` and `0x17`.
 
 ## Controls
 
@@ -246,7 +248,11 @@ deliver. The front panel validates them and forwards them to the power board:
 | 8 | power-good threshold | mV | voltage - 2500 to voltage - 300 | 95.8 % of voltage |
 
 The device then notifies `0xF0B2` with the plaintext frame `0x51, 0x00, 0x00, status`:
-status 0 means the power board confirmed, 1 means it did not answer in time. According
+status 0 means the power board answered within 200 ms, 1 that the front panel did not see
+the answer. The front panel only looks at the first message from the power board in that
+window, so another message arriving first also gives status 1, and resending the block
+is harmless. The front panel keeps the written block before forwarding it, so reads
+return it even after status 1, until the front panel restarts. According
 to the vendor app, the new settings take effect only after the UPS is restarted with the
 reset hole on the front panel. Wrong values can stop the battery from charging.
 
@@ -256,6 +262,8 @@ three further u16 values in the same block, which the device accepts as an optio
 6-byte extension (ranges 100-900, 20-7200 and 100-800). Their meaning is not known and
 the vendor app does not send them. Standby writes are confirmed like adapter writes, with
 a notification on `0xF0B4` even though that characteristic does not declare Notify.
+Clients such as BlueZ do not deliver notifications of a characteristic without that
+property, so this result cannot be received.
 
 **`0xF0B5` and `0xF0B6`**: the vendor app's "Restore System Settings" action writes
 `0xF0B5`. In the analyzed firmware (v1.0-37), `0xF0B5` only requests a fresh telemetry
@@ -341,5 +349,6 @@ Types `0x03` and `0x10` exist in the firmware but are not used by the vendor app
 The integration exposes the settings of the vendor app's advanced configuration page:
 adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
 exposes both screen backlight levels, the versions from the info block, the event byte
-and the Wi-Fi status, which it requests every minute. The factory reset, `0xF0B7`,
-Wake-on-LAN and Wi-Fi setup are not exposed.
+and the Wi-Fi status, which it requests every minute. It waits for the result of adapter
+writes and sends an unconfirmed block once more; standby writes stay unconfirmed. The
+factory reset, `0xF0B7`, Wake-on-LAN and Wi-Fi setup are not exposed.

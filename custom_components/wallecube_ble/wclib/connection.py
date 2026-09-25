@@ -458,6 +458,44 @@ class Connection:
             self._characteristic(characteristic), frame, response=True
         )
 
+    async def send_confirmed_command(
+        self, characteristic: str, payload: bytes, timeout: float
+    ) -> int:
+        """
+        Write a command and wait for the result the device notifies
+
+        The device notifies a result on the characteristics whose commands it forwards
+        to the power-board MCU. The characteristic is only subscribed while the command
+        waits for its result.
+
+        Returns
+        -------
+        Status of the result, `packet.COMMAND_CONFIRMED` if the power board answered
+        """
+        client, _ = self._require_session()
+        target = self._characteristic(characteristic)
+        result: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+
+        def on_result(_: BleakGATTCharacteristic, data: bytearray) -> None:
+            frame = bytes(data)
+            self._listeners.on_data_received(frame, self._connection_state)
+            if not result.done():
+                result.set_result(frame)
+
+        await client.start_notify(target, on_result, **self._notify_kwargs())
+        try:
+            await self.send_command(characteristic, payload)
+            frame = await asyncio.wait_for(result, timeout)
+        finally:
+            if client.is_connected:
+                with contextlib.suppress(EOFError, BleakError):
+                    await client.stop_notify(target)
+
+        self._logger.log_filtered(
+            LogOptions.DECRYPTED_PAYLOADS, "Result %s: %r", characteristic, frame
+        )
+        return packet.decode_command_result(frame)
+
     async def send_config(self, message_type: int, payload: bytes = b"") -> None:
         """Encrypt a message and write it to the configuration characteristic"""
         client, cipher = self._require_session()
@@ -537,10 +575,7 @@ class Connection:
         self._set_state(ConnectionState.SUBSCRIBING)
         assert self._client is not None
 
-        kwargs = {}
-        if self._options.bluez_start_notify:
-            kwargs["bluez"] = {"use_start_notify": True}
-
+        kwargs = self._notify_kwargs()
         await self._client.start_notify(
             self._characteristic(TELEMETRY_CHARACTERISTIC_UUID),
             self._on_telemetry,
@@ -614,6 +649,11 @@ class Connection:
             await self._config_parse(message)
         except Exception as e:  # noqa: BLE001
             await self.add_error(e)
+
+    def _notify_kwargs(self) -> dict[str, Any]:
+        if self._options.bluez_start_notify:
+            return {"bluez": {"use_start_notify": True}}
+        return {}
 
     def _characteristic(self, uuid: str) -> BleakGATTCharacteristic:
         assert self._client is not None

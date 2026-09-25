@@ -34,6 +34,24 @@ def decode_response(plaintext: bytes) -> bytes:
     return plaintext[1:]
 
 
+# status of a command result, any other value means the power board did not answer
+COMMAND_CONFIRMED = 0
+_COMMAND_RESULT_SIZE = 4
+
+
+def decode_command_result(frame: bytes) -> int:
+    """
+    Return the status of the result notified after a command
+
+    The device notifies the frame magic, two zero bytes and the status in the clear on
+    the characteristic that received the command, once it has forwarded the command to
+    the power-board MCU.
+    """
+    if len(frame) < _COMMAND_RESULT_SIZE or frame[0] != FRAME_MAGIC:
+        raise PacketParseError(f"Unexpected command result: {frame.hex()}")
+    return frame[3]
+
+
 CONFIG_TYPE_FLAG = 0x40
 CONFIG_NONCE_SIZE = 2
 

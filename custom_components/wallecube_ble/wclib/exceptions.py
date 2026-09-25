@@ -49,3 +49,7 @@ class UnsupportedBluetoothProtocol(Exception):
 
 class SettingUnavailable(Exception):
     """A setting could not be changed because its current value is not known"""
+
+
+class SettingNotConfirmed(Exception):
+    """The device did not report that the power-board MCU received a setting"""
