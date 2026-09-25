@@ -66,11 +66,13 @@ pairing with the vendor app or account is needed.
 
 > **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
 > The sign convention of Battery Current (charging vs. discharging), the unit of Total
-> Energy Consumed and the position of Battery Health and Number of Cycles in the
-> telemetry are not confirmed yet.
+> Energy Consumed and the position of Number of Cycles in the telemetry are not
+> confirmed yet.
 
 Cell 1–4 Voltage, Max Voltage Difference, Battery Health and Number of Cycles are the
-values of the vendor app's battery health page. Power Event fires *Power Lost* or
+values of the vendor app's battery health page. The UPS does not report a health value:
+like the vendor cloud, the integration estimates it from the number of cycles, from
+100 % at up to 100 cycles down to 0 % at 1500. Power Event fires *Power Lost* or
 *Power Restored* when input power is lost or returns.
 The Wi-Fi entities show the UPS's own network connection, which the vendor cloud and
 Wake-on-LAN use; they are updated every minute. The device page shows the front panel's
@@ -85,8 +87,9 @@ app: the idle level applies once the screen timeout expires, and 0 turns the scr
 > **⚠️ Warning:** Adapter Voltage and Adapter Current must match the label of the power
 > adapter feeding the UPS; wrong values can stop the battery from charging. As in the
 > app, the other adapter limits are derived from them, and the UPS applies the change only
-> after you gently press the reset hole on the front panel. Both entities are disabled
-> by default.
+> after you gently press the reset hole on the front panel. A change fails with an error
+> if the UPS does not confirm that its power board received it. Both entities are
+> disabled by default.
 
 </details>
 

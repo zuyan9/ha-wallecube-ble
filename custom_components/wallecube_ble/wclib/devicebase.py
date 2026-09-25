@@ -267,6 +267,13 @@ class DeviceBase(abc.ABC):
             raise ConnectionError("Device has no connection")
         await self._conn.send_command(characteristic, payload)
 
+    async def send_confirmed_command(
+        self, characteristic: str, payload: bytes, timeout: float
+    ) -> int:
+        if self._conn is None:
+            raise ConnectionError("Device has no connection")
+        return await self._conn.send_confirmed_command(characteristic, payload, timeout)
+
     async def send_config(self, message_type: int, payload: bytes = b"") -> None:
         if self._conn is None:
             raise ConnectionError("Device has no connection")

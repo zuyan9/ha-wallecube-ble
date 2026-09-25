@@ -6,6 +6,7 @@ from bleak.exc import BleakError
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib.connection import (
+    ADAPTER_CHARACTERISTIC_UUID,
     CONFIG_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
     TELEMETRY_CHARACTERISTIC_UUID,
@@ -16,7 +17,10 @@ from custom_components.wallecube_ble.wclib.encryption import (
     SessionCipher,
     derive_session_key,
 )
-from custom_components.wallecube_ble.wclib.exceptions import SessionKeyError
+from custom_components.wallecube_ble.wclib.exceptions import (
+    PacketParseError,
+    SessionKeyError,
+)
 
 ADDRESS = "88:56:A6:00:C4:BE"
 BASE_MAC = bytes.fromhex("8856a600c4bc")
@@ -35,6 +39,7 @@ def client():
     client.read_gatt_char = AsyncMock(return_value=bytearray(info_ciphertext()))
     client.write_gatt_char = AsyncMock()
     client.start_notify = AsyncMock()
+    client.stop_notify = AsyncMock()
     client.disconnect = AsyncMock()
     client.services.get_characteristic = MagicMock(
         side_effect=lambda uuid: SimpleNamespace(uuid=uuid)
@@ -152,6 +157,55 @@ async def test_send_command_writes_authenticated_frame(establish, client):
     assert plaintext[:2] == b"\x51\x00"
     assert int.from_bytes(plaintext[2:6], "little") == session_key.token
     assert plaintext[10] == 0x01
+
+
+def notify_result_on_write(client, result: bytes) -> None:
+    """Answer the next write with a result notification, like the front panel"""
+
+    async def write(characteristic, frame, response):
+        handler = notify_handler(client, characteristic.uuid)
+        handler(characteristic, bytearray(result))
+
+    client.write_gatt_char.side_effect = write
+
+
+async def test_confirmed_command_returns_the_notified_status(establish, client):
+    conn = make_connection()
+    await conn.connect()
+    notify_result_on_write(client, b"\x51\x00\x00\x01")
+
+    status = await conn.send_confirmed_command(
+        ADAPTER_CHARACTERISTIC_UUID, b"\x01", timeout=1
+    )
+
+    assert status == 1
+    # subscribed before the write, so the result cannot be missed
+    subscribed = client.start_notify.await_args_list[-1].args[0]
+    assert subscribed.uuid == ADAPTER_CHARACTERISTIC_UUID
+    assert client.stop_notify.await_args.args[0].uuid == ADAPTER_CHARACTERISTIC_UUID
+
+
+async def test_confirmed_command_times_out_without_a_result(establish, client):
+    conn = make_connection()
+    await conn.connect()
+
+    with pytest.raises(TimeoutError):
+        await conn.send_confirmed_command(
+            ADAPTER_CHARACTERISTIC_UUID, b"\x01", timeout=0.01
+        )
+
+    client.stop_notify.assert_awaited_once()
+
+
+async def test_confirmed_command_rejects_an_unexpected_result(establish, client):
+    conn = make_connection()
+    await conn.connect()
+    notify_result_on_write(client, b"\x00")
+
+    with pytest.raises(PacketParseError):
+        await conn.send_confirmed_command(
+            ADAPTER_CHARACTERISTIC_UUID, b"\x01", timeout=1
+        )
 
 
 async def test_read_value_decrypts_response(establish, client):

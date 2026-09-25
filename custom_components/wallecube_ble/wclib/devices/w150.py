@@ -20,6 +20,7 @@ from ..devicebase import DeviceBase
 from ..encryption import LOCAL_NAME_PREFIX
 from ..exceptions import (
     PacketParseError,
+    SettingNotConfirmed,
     SettingUnavailable,
     UnsupportedBluetoothProtocol,
 )
@@ -31,7 +32,7 @@ from ..model import (
     WifiStatus,
 )
 from ..model.wifi_status import ipv4
-from ..packet import ConfigMessage, TelemetryFrame
+from ..packet import COMMAND_CONFIRMED, ConfigMessage, TelemetryFrame
 from ..props import Field, dataclass_attr_mapper, raw_field
 from ..props.raw_data_props import RawDataProps
 from ..props.transforms import pdiv, prop_has_bit_on
@@ -83,6 +84,12 @@ _GET_SCREEN_BRIGHTNESS = 0x0E
 
 # seconds to wait for the notification that answers a configuration request
 _CONFIG_REPLY_TIMEOUT = 5
+# seconds to wait for the result of a setting forwarded to the power board, the front
+# panel itself waits at most 200 ms for the power board's answer
+_COMMAND_RESULT_TIMEOUT = 5
+# the front panel reports a missing answer as well when another power-board message
+# arrives first while it waits, so an unconfirmed write is sent once more
+_POWER_BOARD_WRITE_ATTEMPTS = 2
 
 # screen timeout the vendor app writes for "keep screen on"
 SCREEN_ALWAYS_ON = 0xFFFFFFFF
@@ -112,7 +119,8 @@ class Device(DeviceBase, RawDataProps):
     cell_voltage_3 = raw_field(tele.cell_voltage_3, pdiv(1000, 3))
     cell_voltage_4 = raw_field(tele.cell_voltage_4, pdiv(1000, 3))
     battery_cycles = raw_field(tele.battery_cycles)
-    battery_health = raw_field(tele.battery_health)
+    # the frame has no health value, see `_battery_health`
+    battery_health = Field[float]()
 
     # status flag names follow the vendor app
     overload = raw_field(tele.status_flags, prop_has_bit_on(2))
@@ -204,6 +212,7 @@ class Device(DeviceBase, RawDataProps):
         self.cell_voltage_difference = (
             max(cells) - min(cells) if None not in cells else None
         )
+        self.battery_health = _battery_health(telemetry.battery_cycles)
 
         self.remaining_time_discharging = (
             round(telemetry.remaining_time / 60)
@@ -367,7 +376,12 @@ class Device(DeviceBase, RawDataProps):
                 raise SettingUnavailable("Current adapter settings could not be read")
 
             settings = AdapterSettings.from_adapter(voltage, current)
-            await self.send_command(ADAPTER_CHARACTERISTIC_UUID, settings.to_bytes())
+            # the front panel keeps the written block and reports it on reads even when
+            # the power board missed it, so only the result tells whether it arrived.
+            # The values read before stay shown if it did not.
+            await self._write_to_power_board(
+                ADAPTER_CHARACTERISTIC_UUID, settings.to_bytes(), "adapter settings"
+            )
             await self._read_adapter()
 
     async def _write_standby(
@@ -385,6 +399,9 @@ class Device(DeviceBase, RawDataProps):
                 raise SettingUnavailable("Current standby settings could not be read")
 
             settings = StandbySettings(time=time, current_threshold=current_threshold)
+            # unconfirmed: the device notifies the result like for the adapter
+            # settings, but on a characteristic without the notify property, and
+            # clients such as BlueZ do not deliver such notifications
             await self.send_command(STANDBY_CHARACTERISTIC_UUID, settings.to_bytes())
             await self._read_standby()
 
@@ -406,6 +423,27 @@ class Device(DeviceBase, RawDataProps):
                 struct.pack("<IB", self._raw_screen_timeout, percent),
             )
             await self._request_screen_timeout()
+
+    async def _write_to_power_board(
+        self, characteristic: str, payload: bytes, description: str
+    ) -> None:
+        """Write a setting the front panel forwards and wait for the power board"""
+        for _ in range(_POWER_BOARD_WRITE_ATTEMPTS):
+            try:
+                status = await self.send_confirmed_command(
+                    characteristic, payload, _COMMAND_RESULT_TIMEOUT
+                )
+            except TimeoutError as e:
+                raise SettingNotConfirmed(
+                    f"The UPS did not report whether its power board received the "
+                    f"{description}"
+                ) from e
+            if status == COMMAND_CONFIRMED:
+                return
+            self._logger.debug("Power board did not answer, status %d", status)
+        raise SettingNotConfirmed(
+            f"The UPS power board did not confirm the {description}"
+        )
 
     async def _read_adapter(self) -> None:
         settings = AdapterSettings.from_bytes(
@@ -483,6 +521,15 @@ class Device(DeviceBase, RawDataProps):
 
 def _scaled(value: int | None, divisor: int) -> float | None:
     return None if value is None else round(value / divisor, 3)
+
+
+def _battery_health(cycles: int | None) -> float | None:
+    # the vendor cloud estimates the health from the cycle count alone and the vendor
+    # app shows its result. The cloud only caps it at 100 %, below 0 % it is limited
+    # here.
+    if cycles is None:
+        return None
+    return round(max(0.0, min(100.0, (1500 - cycles) / 14)), 1)
 
 
 def _power_event(value: int) -> PowerEvent | None:

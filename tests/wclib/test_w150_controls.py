@@ -23,11 +23,15 @@ from custom_components.wallecube_ble.wclib.devices.w150 import (
     TemperatureUnit,
 )
 from custom_components.wallecube_ble.wclib.exceptions import (
+    SettingNotConfirmed,
     SettingUnavailable,
     UnsupportedBluetoothProtocol,
 )
 from custom_components.wallecube_ble.wclib.model import AdapterSettings
-from custom_components.wallecube_ble.wclib.packet import ConfigMessage
+from custom_components.wallecube_ble.wclib.packet import (
+    COMMAND_CONFIRMED,
+    ConfigMessage,
+)
 
 # read responses carry the payload after the magic byte, zero padded to a block
 ADAPTER_12V_3A = struct.pack("<5H", 3000, 2000, 12000, 11580, 11496) + bytes(5)
@@ -43,7 +47,13 @@ def device(mocker: MockerFixture):
 
 
 @pytest.fixture
-def settings(device: Device, mocker: MockerFixture):
+def results() -> list[int]:
+    """Statuses the fake device notifies for forwarded writes, confirmed when empty"""
+    return []
+
+
+@pytest.fixture
+def settings(device: Device, mocker: MockerFixture, results: list[int]):
     """Fake device storage behind read_value/send_command"""
     values = {
         ADAPTER_CHARACTERISTIC_UUID: ADAPTER_12V_3A,
@@ -62,8 +72,18 @@ def settings(device: Device, mocker: MockerFixture):
         await asyncio.sleep(0)
         values[characteristic] = payload + bytes(15 - len(payload))
 
+    # like the front panel, keeps the written block whether the power board answers
+    async def send_confirmed_command(
+        characteristic: str, payload: bytes, timeout: float
+    ) -> int:
+        await send_command(characteristic, payload)
+        return results.pop(0) if results else COMMAND_CONFIRMED
+
     mocker.patch.object(device, "read_value", side_effect=read_value)
     mocker.patch.object(device, "send_command", side_effect=send_command)
+    mocker.patch.object(
+        device, "send_confirmed_command", side_effect=send_confirmed_command
+    )
     mocker.patch.object(device, "send_config", new=AsyncMock())
     return values
 
@@ -215,9 +235,46 @@ async def test_adapter_voltage_rewrites_block_with_current_rating(
 ):
     await device.set_adapter_voltage(19.5)
 
-    payload = device.send_command.await_args.args[1]
+    characteristic, payload, _ = device.send_confirmed_command.await_args.args
+    assert characteristic == ADAPTER_CHARACTERISTIC_UUID
     assert struct.unpack("<5H", payload) == (3000, 2100, 19500, 18817, 18681)
     assert device.adapter_voltage == 19.5
+    assert device.adapter_current == 3.0
+    device.send_command.assert_not_awaited()
+
+
+async def test_unconfirmed_adapter_write_is_sent_once_more(
+    device: Device, settings, results: list[int]
+):
+    results.append(1)
+
+    await device.set_adapter_voltage(19.5)
+
+    assert device.send_confirmed_command.await_count == 2
+    assert device.adapter_voltage == 19.5
+
+
+async def test_adapter_write_fails_when_the_power_board_does_not_answer(
+    device: Device, settings, results: list[int]
+):
+    results.extend([1, 1])
+
+    with pytest.raises(SettingNotConfirmed):
+        await device.set_adapter_voltage(19.5)
+
+    # the front panel would report the new block, the value read before stays
+    assert device.send_confirmed_command.await_count == 2
+    assert device.adapter_voltage == 12.0
+
+
+async def test_adapter_write_fails_without_a_result(
+    device: Device, settings, mocker: MockerFixture
+):
+    mocker.patch.object(device, "send_confirmed_command", side_effect=TimeoutError)
+
+    with pytest.raises(SettingNotConfirmed):
+        await device.set_adapter_current(5.0)
+
     assert device.adapter_current == 3.0
 
 

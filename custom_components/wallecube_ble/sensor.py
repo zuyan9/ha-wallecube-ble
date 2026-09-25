@@ -155,12 +155,17 @@ def duration(
 
 
 def percentage(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
+    key: str = "",
+    *,
+    enabled: bool = True,
+    precision: int | None = None,
+    **kwargs: Unpack[_SensorKwargs],
 ) -> WalleCubeSensorEntityDescription:
     return WalleCubeSensorEntityDescription(
         key=key,
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=precision,
         entity_registry_enabled_default=enabled,
         **kwargs,
     )
@@ -224,8 +229,8 @@ _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "remaining_time_discharging": duration(),
     # the raw unit is not confirmed on hardware
     "energy_total": energy(enabled=False, precision=3),
-    # the position of both values is not confirmed on hardware
-    "battery_health": percentage(enabled=False),
+    # only the vendor cloud places the cycle count, the health is derived from it
+    "battery_health": percentage(enabled=False, precision=0),
     "battery_cycles": count(enabled=False),
     "power_board_firmware_version": diagnostic(),
     "power_board_hardware_version": diagnostic(enabled=False),
