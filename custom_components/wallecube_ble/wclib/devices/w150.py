@@ -68,6 +68,17 @@ def _battery_temperature(value: int | None) -> float | None:
     return value / 10
 
 
+# the front panel keeps its backlight pin high for about the stored level in percent
+# of each PWM period, but the backlight is lit while the pin is low. A higher level
+# dims the screen, and level 100 still leaves it faintly lit.
+def _brightness(backlight_level: int) -> int:
+    return 100 - backlight_level
+
+
+def _backlight_level(brightness: float) -> int:
+    return 100 - round(brightness)
+
+
 class BuzzerMode(enum.IntEnum):
     MUTE = 0
     ONCE = 1
@@ -316,13 +327,13 @@ class Device(DeviceBase, RawDataProps):
             self.screen_timeout = timeout
             self._last_screen_timeout = timeout
         if len(payload) >= 5:
-            self.screen_idle_brightness = payload[4]
+            self.screen_idle_brightness = _brightness(payload[4])
         return True
 
     def _parse_screen_brightness(self, payload: bytes) -> bool:
         if not payload:
             return False
-        self.screen_brightness = payload[0]
+        self.screen_brightness = _brightness(payload[0])
         return True
 
     async def refresh_settings(self) -> None:
@@ -384,15 +395,19 @@ class Device(DeviceBase, RawDataProps):
             SCREEN_ALWAYS_ON if enabled else self._last_screen_timeout
         )
 
-    @controls.percentage(screen_brightness, min=20, max=100)
+    # the front panel raises an active backlight level below 20 to 20, so the screen
+    # is at most 80 % bright
+    @controls.percentage(screen_brightness, min=0, max=80)
     async def set_screen_brightness(self, percent: float) -> None:
-        await self.send_config(_SET_SCREEN_BRIGHTNESS, bytes([round(percent)]))
+        await self.send_config(
+            _SET_SCREEN_BRIGHTNESS, bytes([_backlight_level(percent)])
+        )
         await self._request_screen_brightness()
 
-    # 0 turns the screen dark once the timeout expires
+    # applies once the screen timeout expires
     @controls.percentage(screen_idle_brightness, min=0, max=100)
     async def set_screen_idle_brightness(self, percent: float) -> None:
-        await self._write_screen_idle_brightness(round(percent))
+        await self._write_idle_backlight(_backlight_level(percent))
 
     # front-panel firmware before 1.18 has no temperature unit setting
     @controls.select(
@@ -463,7 +478,7 @@ class Device(DeviceBase, RawDataProps):
             await self.send_config(_SET_SCREEN_TIMEOUT, struct.pack("<I", seconds))
             await self._request_screen_timeout()
 
-    async def _write_screen_idle_brightness(self, percent: int) -> None:
+    async def _write_idle_backlight(self, level: int) -> None:
         # the idle level is only written together with the timeout, so the current
         # timeout is read first to keep a change made on the device meanwhile
         async with self._screen_lock:
@@ -472,7 +487,7 @@ class Device(DeviceBase, RawDataProps):
                 raise SettingUnavailable("Current screen timeout could not be read")
             await self.send_config(
                 _SET_SCREEN_TIMEOUT,
-                struct.pack("<IB", self._raw_screen_timeout, percent),
+                struct.pack("<IB", self._raw_screen_timeout, level),
             )
             await self._request_screen_timeout()
 

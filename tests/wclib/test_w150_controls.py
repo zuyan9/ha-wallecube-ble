@@ -387,20 +387,22 @@ async def test_turning_always_on_off_restores_last_timeout(device: Device):
 
 
 async def test_screen_reply_updates_idle_brightness(device: Device):
+    # a higher backlight level dims the screen
     await device.config_parse(screen_reply(600, idle_backlight=30))
 
-    assert device.screen_idle_brightness == 30
+    assert device.screen_idle_brightness == 70
 
 
-async def test_screen_brightness_is_set_over_the_config_channel(device: Device):
+async def test_screen_brightness_is_set_as_backlight_level(device: Device):
     device.send_config = AsyncMock()
 
     await device.set_screen_brightness(55)
-    await device.set_screen_brightness(5)
+    await device.set_screen_brightness(95)
 
     assert device.send_config.await_args_list == [
-        call(0x0D, bytes([55])),
+        call(0x0D, bytes([45])),
         call(0x0E),
+        # the lowest level the front panel keeps
         call(0x0D, bytes([20])),
         call(0x0E),
     ]
@@ -410,7 +412,7 @@ async def test_brightness_reply_updates_brightness(device: Device):
     message = ConfigMessage(message_type=0x0E, token=0, payload=bytes([80]))
 
     assert await device.config_parse(message) is True
-    assert device.screen_brightness == 80
+    assert device.screen_brightness == 20
 
 
 async def test_idle_brightness_is_written_with_the_current_timeout(
@@ -423,7 +425,7 @@ async def test_idle_brightness_is_written_with_the_current_timeout(
     await device.set_screen_idle_brightness(40)
     await asyncio.sleep(0)
 
-    assert screen == {"timeout": 900, "idle": 40}
+    assert screen == {"timeout": 900, "idle": 60}
     assert device.screen_timeout == 900
     assert device.screen_idle_brightness == 40
 
@@ -433,7 +435,7 @@ async def test_idle_brightness_keeps_the_screen_always_on(device: Device, screen
 
     await device.set_screen_idle_brightness(0)
 
-    assert screen == {"timeout": SCREEN_ALWAYS_ON, "idle": 0}
+    assert screen == {"timeout": SCREEN_ALWAYS_ON, "idle": 100}
 
 
 async def test_idle_brightness_fails_when_the_timeout_is_not_answered(

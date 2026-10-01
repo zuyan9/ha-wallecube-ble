@@ -434,10 +434,10 @@ they do not match the raw numbers.
 | `0x08` | - | request Wake-on-LAN targets, answered as type `0x08` with u8 count and the MACs |
 | `0x09` | 3 × u16 | set Wake-on-LAN trigger, see below |
 | `0x0A` | - | request Wake-on-LAN trigger, answered as type `0x0A` |
-| `0x0B` | u32 timeout (s, at least 30; `0xFFFFFFFF` keeps the screen on), optional u8 idle backlight (%, up to 100) | set screen timeout |
-| `0x0C` | - | request screen timeout, answered as type `0x0C` with u32 timeout and u8 idle backlight |
-| `0x0D` | u8 backlight (%, 20-100) | set active backlight |
-| `0x0E` | - | request active backlight, answered as type `0x0E` with u8 backlight |
+| `0x0B` | u32 timeout (s, at least 30; `0xFFFFFFFF` keeps the screen on), optional u8 idle backlight level (up to 100) | set screen timeout |
+| `0x0C` | - | request screen timeout, answered as type `0x0C` with u32 timeout and u8 idle backlight level |
+| `0x0D` | u8 backlight level (20-100) | set active backlight |
+| `0x0E` | - | request active backlight, answered as type `0x0E` with u8 backlight level |
 
 Set requests are not answered. After new Wi-Fi credentials the front panel reconnects
 without restarting. Type `0x10` is accepted but has no effect. Type `0x03` is only used
@@ -447,9 +447,17 @@ The **Wi-Fi scan** result is one notification that packs one record per network,
 signal strength (dBm), u8 SSID length and the SSID, until the payload exceeds 200 bytes.
 
 After the screen timeout expires without interaction, the screen switches to its idle
-view at the idle backlight level. Defaults: timeout 300 s, both backlight levels 70 %.
-The idle backlight has no lower limit, so 0 turns the screen dark. It can only be
-written together with the timeout.
+view at the idle backlight level. The front panel raises an active level below 20 to
+20. The idle level has no lower limit and can only be written together with the
+timeout. Defaults: timeout 300 s, both backlight levels 70.
+
+A **backlight level** is a PWM duty, not a brightness. The front panel drives the
+backlight pin (GPIO 3, 5 kHz, 13-bit) high for level × 8000 / 8192 of each period and
+configures it as active high. On the W150 tested, the backlight is lit while the pin is
+low, so a higher level dims the screen: brightness is about 100 % minus the level, 0 is
+full brightness and 100 leaves the backlight faintly lit, never off. The active screen
+therefore reaches at most about 80 %, and the defaults give about 30 %. The vendor
+miniprogram writes idle level 100, its darkest, whenever it saves a custom timeout.
 
 The **Wi-Fi status** request (`0x01`) is answered as type `0x01`:
 
@@ -478,8 +486,8 @@ Defaults: 30 s, 30 s, 35 %.
 
 The integration exposes the settings of the vendor app's advanced configuration page:
 adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
-exposes both screen backlight levels, the versions from the info block, the event byte
-and the Wi-Fi status, which it requests every minute. It waits for the result of adapter
-writes and sends an unconfirmed block once more; standby writes stay unconfirmed. The
-factory reset, `0xF0B7`, the last three standby values, Wake-on-LAN and Wi-Fi setup are
-not exposed.
+exposes the versions from the info block, the event byte and the Wi-Fi status, which it
+requests every minute, and both screen backlight levels as brightness, 100 minus the
+level. It waits for the result of adapter writes and sends an unconfirmed block once
+more; standby writes stay unconfirmed. The factory reset, `0xF0B7`, the last three
+standby values, Wake-on-LAN and Wi-Fi setup are not exposed.

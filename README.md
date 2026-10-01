@@ -95,7 +95,8 @@ firmware 19 as V1.19.
 
 The controls mirror the vendor app's advanced configuration page and use its wording in
 English, 简体中文 and Русский. Screen Brightness and Screen Idle Brightness are not in the
-app: the idle level applies once the screen timeout expires, and 0 turns the screen dark.
+app: the idle level applies once the screen timeout expires. Screen Brightness goes up
+to 80 %, the most the UPS allows. At 0 % the screen stays faintly lit.
 Sleep Time and Sleep Min Current turn the output off when the UPS runs on battery with a
 smaller load than the minimum current for longer than the sleep time. The output comes
 back when input power returns or the front-panel button is pressed, not when the load

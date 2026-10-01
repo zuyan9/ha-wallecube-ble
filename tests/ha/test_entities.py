@@ -156,7 +156,7 @@ def test_brightness_is_a_percentage_slider(device: Device):
 
     assert number.native_unit_of_measurement == PERCENTAGE
     assert number.mode is NumberMode.SLIDER
-    assert (number.native_min_value, number.native_max_value) == (20, 100)
+    assert (number.native_min_value, number.native_max_value) == (0, 80)
 
 
 def test_cell_voltages_share_one_translation(device: Device):
