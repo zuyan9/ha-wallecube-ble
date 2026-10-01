@@ -227,11 +227,10 @@ _SENSORS: Final[dict[str, SensorEntityDescription]] = {
     "output_power": power(precision=1),
     "temperature": temperature(),
     "remaining_time_discharging": duration(),
-    # the raw unit is not confirmed on hardware
-    "energy_total": energy(enabled=False, precision=3),
-    # only the vendor cloud places the cycle count, the health is derived from it
-    "battery_health": percentage(enabled=False, precision=0),
-    "battery_cycles": count(enabled=False),
+    "energy_total": energy(precision=3),
+    # estimated from the cycle count like the vendor cloud does
+    "battery_health": percentage(precision=0),
+    "battery_cycles": count(),
     "power_board_firmware_version": diagnostic(),
     "power_board_hardware_version": diagnostic(enabled=False),
     "wifi_rssi": signal_strength(entity_category=EntityCategory.DIAGNOSTIC),

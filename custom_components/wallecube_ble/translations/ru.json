@@ -201,6 +201,21 @@
       "shutdown_imminent": {
         "name": "Скорое отключение"
       },
+      "battery_fault": {
+        "name": "Неисправность батареи"
+      },
+      "over_temperature": {
+        "name": "Перегрев батареи"
+      },
+      "under_temperature": {
+        "name": "Переохлаждение батареи"
+      },
+      "input_over_voltage": {
+        "name": "Перенапряжение на входе"
+      },
+      "output_over_current": {
+        "name": "Превышение выходного тока"
+      },
       "wifi_connected": {
         "name": "Wi-Fi"
       }

@@ -123,6 +123,16 @@ class DeviceBase(abc.ABC):
         """Factory MAC parsed from the advertised name, if it was available"""
         return self._base_mac_hint
 
+    def has_characteristic(self, uuid: str) -> bool:
+        """
+        Return False if the device is known not to expose the characteristic
+
+        Firmware versions differ in their characteristics. They are known once a
+        connection was established, before that every characteristic counts as present.
+        """
+        known = None if self._conn is None else self._conn.characteristics
+        return known is None or uuid in known
+
     @property
     def session_info(self) -> dict[str, Any] | None:
         """Non-sensitive details about how the session key was established"""

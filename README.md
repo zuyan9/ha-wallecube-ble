@@ -41,39 +41,50 @@ pairing with the vendor app or account is needed.
 
 <br>
 
-| *Sensors*                          | *Binary Sensors*  | *Events*    | *Controls*                   |
-|------------------------------------|-------------------|-------------|------------------------------|
-| Battery Level                      | Input Power       | Power Event | Buzzer                       |
-| Battery Voltage                    | Charging          |             | Screen Language              |
-| Battery Current                    | Discharging       |             | Temperature Unit             |
-| Cell 1–4 Voltage                   | Overload          |             | Screen Timeout               |
-| Max Voltage Difference             | Shutdown Imminent |             | Keep Screen On               |
-| Battery Health *(disabled)*        | Wi-Fi             |             | Screen Brightness            |
-| Number of Cycles *(disabled)*      |                   |             | Screen Idle Brightness       |
-| DC Input Voltage                   |                   |             | Sleep Time                   |
-| DC Input Current                   |                   |             | Sleep Min Current            |
-| DC Output Voltage                  |                   |             | Adapter Voltage *(disabled)* |
-| DC Output Current                  |                   |             | Adapter Current *(disabled)* |
-| Output Power                       |                   |             |                              |
-| Temperature                        |                   |             |                              |
-| Discharge Time Remaining           |                   |             |                              |
-| Total Energy Consumed *(disabled)* |                   |             |                              |
-| UPS Firmware Version               |                   |             |                              |
-| UPS Hardware Version *(disabled)*  |                   |             |                              |
-| Wi-Fi Signal                       |                   |             |                              |
-| Wi-Fi Network                      |                   |             |                              |
-| IP Address                         |                   |             |                              |
+| *Sensors*                         | *Binary Sensors*    | *Events*    | *Controls*                   |
+|-----------------------------------|---------------------|-------------|------------------------------|
+| Battery Level                     | Input Power         | Power Event | Buzzer                       |
+| Battery Voltage                   | Charging            |             | Screen Language              |
+| Battery Current                   | Discharging         |             | Temperature Unit             |
+| Cell 1–4 Voltage                  | Overload            |             | Screen Timeout               |
+| Max Voltage Difference            | Shutdown Imminent   |             | Keep Screen On               |
+| Battery Health                    | Battery Fault       |             | Screen Brightness            |
+| Number of Cycles                  | Battery Overheating |             | Screen Idle Brightness       |
+| DC Input Voltage                  | Battery Too Cold    |             | Sleep Time                   |
+| DC Input Current                  | Input Overvoltage   |             | Sleep Min Current            |
+| DC Output Voltage                 | Output Overcurrent  |             | Adapter Voltage *(disabled)* |
+| DC Output Current                 | Wi-Fi               |             | Adapter Current *(disabled)* |
+| Output Power                      |                     |             |                              |
+| Battery Temperature               |                     |             |                              |
+| Discharge Time Remaining          |                     |             |                              |
+| Total Energy Consumed             |                     |             |                              |
+| UPS Firmware Version              |                     |             |                              |
+| UPS Hardware Version *(disabled)* |                     |             |                              |
+| Wi-Fi Signal                      |                     |             |                              |
+| Wi-Fi Network                     |                     |             |                              |
+| IP Address                        |                     |             |                              |
 
 > **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
-> The sign convention of Battery Current (charging vs. discharging), the unit of Total
-> Energy Consumed and the position of Number of Cycles in the telemetry are not
-> confirmed yet.
+> Like the UPS display, it counts down to an empty battery, but the UPS turns its output
+> off earlier, when the battery reaches the reserve it keeps. For a shutdown automation,
+> use Shutdown Imminent or Battery Level instead.
+
+Battery Current is positive while the battery charges. The UPS estimates DC Input
+Current from the output current and the charging power instead of measuring it. On
+battery, the UPS turns its output off when the charge falls to its reserve, 18 % by
+default. With power-board firmware 1.29, Battery Level counts only the charge above the
+reserve: it reaches 0 % at that point, and Shutdown Imminent turns on at about 8.5 %.
+With older firmware, the output turns off at about 18 % and Shutdown Imminent turns on
+at 25 %.
 
 Cell 1–4 Voltage, Max Voltage Difference, Battery Health and Number of Cycles are the
-values of the vendor app's battery health page. The UPS does not report a health value:
-like the vendor cloud, the integration estimates it from the number of cycles, from
-100 % at up to 100 cycles down to 0 % at 1500. Power Event fires *Power Lost* or
-*Power Restored* when input power is lost or returns.
+values of the vendor app's battery health page. The UPS counts full charge cycles but
+does not report a health value: like the vendor cloud, the integration estimates it
+from the number of cycles, from 100 % at up to 100 cycles down to 0 % at 1500. Power
+Event fires *Power Lost* or *Power Restored* when input power is lost or returns.
+Battery Fault, Battery Overheating, Battery Too Cold, Input Overvoltage and Output
+Overcurrent show the protection conditions the UPS reports. Input Overvoltage means that
+the adapter delivers more than 1.8 V above the configured Adapter Voltage.
 The Wi-Fi entities show the UPS's own network connection, which the vendor cloud and
 Wake-on-LAN use; they are updated every minute. The device page shows the front panel's
 firmware and hardware versions and the UPS version entities those of the power board,
@@ -83,22 +94,30 @@ firmware 19 as V1.19.
 The controls mirror the vendor app's advanced configuration page and use its wording in
 English, 简体中文 and Русский. Screen Brightness and Screen Idle Brightness are not in the
 app: the idle level applies once the screen timeout expires, and 0 turns the screen dark.
+Sleep Time and Sleep Min Current turn the output off when the UPS runs on battery with a
+smaller load than the minimum current for longer than the sleep time. The output comes
+back when input power returns or the front-panel button is pressed, not when the load
+rises again. Temperature Unit needs front-panel firmware 1.18 or newer and is left out on
+older firmware.
 
 > **⚠️ Warning:** Adapter Voltage and Adapter Current must match the label of the power
-> adapter feeding the UPS; wrong values can stop the battery from charging. As in the
-> app, the other adapter limits are derived from them, and the UPS applies the change only
-> after you gently press the reset hole on the front panel. A change fails with an error
-> if the UPS does not confirm that its power board received it. Both entities are
-> disabled by default.
+> adapter feeding the UPS; wrong values can stop the battery from charging. The UPS also
+> generates Adapter Voltage at its output while on battery. As in the app, the other
+> adapter limits are derived from them, and the UPS applies the change only after you
+> gently press the reset hole on the front panel. A change fails with an error if the UPS
+> does not confirm that its power board received it. Both entities are disabled by
+> default.
 
 </details>
 
 <br>
 
 > [!NOTE]
-> Other WalleCube models that advertise as `Walle-…` (e.g. the W120, which uses the same
-> front-panel board) may work but are untested. Wake-on-LAN targets, Wi-Fi setup and the
-> system reset of the vendor app are not implemented yet. Please
+> The W180 runs the same front-panel firmware and telemetry format as the W150 and should
+> work, but it is untested; the device page shows the model its power board reports.
+> According to the vendor apps, the W120 sends an older telemetry format, which the
+> integration does not decode. Wake-on-LAN targets, Wi-Fi setup and the factory reset are
+> not implemented. Please
 > [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if you can
 > help test another model.
 

@@ -298,6 +298,26 @@ async def test_telemetry_is_subscribed_before_config(establish, client):
     assert subscribed == [TELEMETRY_CHARACTERISTIC_UUID, CONFIG_CHARACTERISTIC_UUID]
 
 
+async def test_connect_records_the_device_characteristics(establish, client):
+    client.services.characteristics = {
+        handle: SimpleNamespace(uuid=uuid)
+        for handle, uuid in enumerate(
+            (TELEMETRY_CHARACTERISTIC_UUID, INFO_CHARACTERISTIC_UUID)
+        )
+    }
+    conn = make_connection()
+    assert conn.characteristics is None
+
+    await conn.connect()
+    await conn.disconnect()
+
+    # firmware versions differ in their characteristics, the set outlives the link
+    assert conn.characteristics == {
+        TELEMETRY_CHARACTERISTIC_UUID,
+        INFO_CHARACTERISTIC_UUID,
+    }
+
+
 async def test_connects_without_config_characteristic(establish, client):
     client.services.get_characteristic.side_effect = lambda uuid: (
         None if uuid == CONFIG_CHARACTERISTIC_UUID else SimpleNamespace(uuid=uuid)

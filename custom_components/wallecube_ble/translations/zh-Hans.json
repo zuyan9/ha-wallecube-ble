@@ -201,6 +201,21 @@
       "shutdown_imminent": {
         "name": "即将关机"
       },
+      "battery_fault": {
+        "name": "电池故障"
+      },
+      "over_temperature": {
+        "name": "电池过热"
+      },
+      "under_temperature": {
+        "name": "电池温度过低"
+      },
+      "input_over_voltage": {
+        "name": "输入过压"
+      },
+      "output_over_current": {
+        "name": "输出过流"
+      },
       "wifi_connected": {
         "name": "WiFi连接"
       }

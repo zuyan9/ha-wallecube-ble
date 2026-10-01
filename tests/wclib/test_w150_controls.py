@@ -199,6 +199,33 @@ async def test_refresh_skips_missing_characteristics(
     assert device.buzzer_mode is BuzzerMode.ONCE
 
 
+async def test_settings_missing_in_the_firmware_are_not_offered(
+    device: Device, settings, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+):
+    # front-panel firmware before 1.18 has no temperature unit characteristic
+    mocker.patch.object(
+        device,
+        "has_characteristic",
+        side_effect=lambda uuid: uuid != TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
+    )
+    reads: list[str] = []
+    read = device.read_value
+
+    async def read_value(characteristic: str) -> bytes:
+        reads.append(characteristic)
+        return await read(characteristic)
+
+    mocker.patch.object(device, "read_value", side_effect=read_value)
+
+    await device.refresh_settings()
+
+    selects = {c.key for c in get_controls(device, controls.select)}
+    assert selects == {"buzzer_mode", "screen_language"}
+    assert TEMPERATURE_UNIT_CHARACTERISTIC_UUID not in reads
+    assert device.buzzer_mode is BuzzerMode.ONCE
+    assert "Could not read setting" not in caplog.text
+
+
 async def test_select_writes_option_value(device: Device, settings):
     control = next(
         c for c in get_controls(device, controls.select) if c.key == "buzzer_mode"
@@ -306,6 +333,26 @@ async def test_number_control_clamps_to_device_range(device: Device, settings):
     await control.set_value_func(device, 5)
 
     assert device.send_command.await_args.args[1] == struct.pack("<2H", 20, 100)
+
+
+@pytest.mark.parametrize(
+    ("info", "written"),
+    [
+        # power-board firmware 1.27 keeps its threshold above 2000 mA
+        ("00 0300 1b00 0300 1300", 2000),
+        ("00 0300 1d00 0300 1300", 2500),
+        # versions not reported
+        ("00 0000 0000 0300 1300", 2500),
+    ],
+)
+async def test_standby_threshold_fits_the_power_board_firmware(
+    device: Device, settings, info: str, written: int
+):
+    device.info_parse(bytes.fromhex(info) + bytes(6))
+
+    await device.set_standby_current_threshold(2500)
+
+    assert settings[STANDBY_CHARACTERISTIC_UUID][:4] == struct.pack("<2H", 300, written)
 
 
 async def test_screen_timeout_is_set_over_the_config_channel(device: Device):
@@ -466,7 +513,7 @@ async def test_direct_setter_calls_are_clamped_and_accept_option_names(
     await device.set_adapter_voltage(50)
     await device.set_buzzer_mode("mute")
 
-    assert device.adapter_voltage == 20.2
+    assert device.adapter_voltage == 20.0
     assert device.buzzer_mode is BuzzerMode.MUTE
 
 

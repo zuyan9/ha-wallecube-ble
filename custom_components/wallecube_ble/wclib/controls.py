@@ -31,6 +31,9 @@ class ControlType:
 
     enabled: bool = dataclasses.field(default=True, kw_only=True)
     translation_key: str | None = dataclasses.field(default=None, kw_only=True)
+    # characteristic only some firmware versions expose, the control is not offered
+    # for a device that lacks it
+    characteristic: str | None = dataclasses.field(default=None, kw_only=True)
 
     @property
     def key(self) -> str:

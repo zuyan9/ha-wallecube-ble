@@ -1,9 +1,22 @@
 # WalleCube W150 BLE protocol
 
 Local Bluetooth LE protocol of the W150 DC UPS as implemented by this integration. It was
-recovered from the front-panel firmware (ESP32-C3 / ESP8685); statements are verified
-against that firmware unless marked otherwise. The device's separate cloud path (MQTT with
-JWT authentication) is out of scope.
+recovered from the firmware of the front panel (ESP32-C3 / ESP8685), which implements
+Bluetooth, and of the power board (HC32L07x), which measures and controls the UPS.
+Statements are verified against that firmware unless marked otherwise. The device's
+separate cloud path (MQTT with JWT authentication) is out of scope.
+
+## Firmware versions
+
+The analysis covers front-panel firmware 1.16 to 1.20 (builds v1.0-25 to v1.0-47) and
+power-board firmware 1.21, 1.27 and 1.29 of the W150. All front-panel versions implement
+the protocol below identically, except that the temperature unit characteristic `0xF0B9`
+only exists from 1.18 on. All power-board versions fill the telemetry block with the same
+layout; where their behavior differs, the text says so. The info characteristic reports
+both versions, see [Controls](#ups-service).
+
+The W180 runs the same front-panel firmware. Its power board (firmware 1.25, 1.28 and
+1.29 analyzed) uses a 4S Li-ion battery instead of 4S LiFePO4 but the same protocol.
 
 ## Advertising
 
@@ -37,9 +50,9 @@ Custom **UPS** service `0xF0A1`:
 | `0xF0B4` | Read, Write | Standby settings |
 | `0xF0B5` | Write | Telemetry refresh (see [Controls](#controls)) |
 | `0xF0B6` | Write | Factory reset |
-| `0xF0B7` | Read, Write, Notify | Raw power-board command, not mapped |
+| `0xF0B7` | Read, Write, Notify | USB wake-up setting of the power board |
 | `0xF0B8` | Read, Write | Screen language |
-| `0xF0B9` | Read, Write | Screen temperature unit |
+| `0xF0B9` | Read, Write | Screen temperature unit, from front-panel firmware 1.18 |
 | `0xF0BF` | Read | Info block (10 bytes) |
 
 Custom **configuration** service `0xF0A2` with characteristic `0xF0C1` (Write, Notify):
@@ -104,57 +117,64 @@ Configuration service (`0xF0C1`), in both directions:
 Writes must be 16-128 bytes after encryption. Requests that read a value are answered
 with a notification on `0xF0C1` in the same format, including the token.
 
-**MTU**: telemetry notifications (40 bytes) and the Wi-Fi status reply (up to 64 bytes)
-need a larger ATT MTU than the default 23. BlueZ and ESPHome Bluetooth proxies exchange
-the MTU when they connect, and so does the vendor app. On a link that keeps the default,
-notifications are cut to 20 bytes: telemetry decodes partially and encrypted replies
-longer than one block are lost.
+**MTU**: the front panel sends every notification in one piece and does not split it
+when the ATT MTU is too small; the Bluetooth stack cuts it off instead. Telemetry
+notifications (40 bytes), the Wi-Fi status reply (up to 64 bytes) and the Wi-Fi scan
+result (up to about 208 bytes) need a larger MTU than the default 23. BlueZ and ESPHome
+Bluetooth proxies exchange the MTU when they connect, and so does the vendor app. On a
+link that keeps the default, notifications are cut to 20 bytes: telemetry decodes
+partially and encrypted replies longer than one block are lost.
 
 ## Telemetry
 
-`0xF0B1` notifications are plaintext **40-byte** frames. The front panel receives the
-measurements from the power-board MCU and forwards the 38-byte payload unchanged,
-prefixed with the magic byte `0x51` and an event byte. All fields are little-endian.
+`0xF0B1` notifications are plaintext **40-byte** frames. The power board measures the
+UPS and builds a 38-byte block, which it sends to the front panel about once a second
+while it runs and whenever the front panel asks for it. The front panel forwards the
+block unchanged, prefixed with the magic byte `0x51` and an event byte. All fields are
+little-endian.
 
-The **Source** column says where a field's meaning comes from:
+| Frame offset | Payload offset | Type | Field | Unit |
+| --- | --- | --- | --- | --- |
+| 0 | - | u8 | magic `0x51` | - |
+| 1 | - | u8 | event, see below | - |
+| 2 | 0 | u16 | DC input voltage | mV |
+| 4 | 2 | u16 | DC input current, estimated, see below | mA |
+| 6 | 4 | u16 | DC output voltage | mV |
+| 8 | 6 | u16 | DC output current | mA |
+| 10 | 8 | u16 | battery level, see below | 0.1 % |
+| 12 | 10 | u16 | battery voltage, see below | mV |
+| 14 | 12 | 4 × u16 | cell voltages, from the bottom of the stack up | mV |
+| 22 | 20 | s16 | battery current, positive while charging | mA |
+| 24 | 22 | s16 | battery temperature | 0.1 °C |
+| 26 | 24 | u16 | battery cycle count, see below | - |
+| 28 | 26 | u16 | remaining time, see below | s |
+| 30 | 28 | u32 | output energy, see below | mWh |
+| 34 | 32 | u32 | fault flags, see below | bitfield |
+| 38 | 36 | u16 | status flags, see below | bitfield |
 
-- **firmware**: the front panel uses the field itself: on its screen, for the buzzer or
-  for Wake-on-LAN.
-- **app**: only the vendor app's decoder names it.
-- **cloud**: only the vendor cloud names it. The front panel uploads the same 38-byte
-  payload, and the vendor app shows the cloud's values on its battery health page.
+The power board measures input and output with its own ADC and the battery with a
+battery monitor chip (TI BQ76920): the four cells, the battery current through a 5 mΩ
+shunt and a thermistor. The front panel shows voltages, currents and power with one
+decimal and computes the output power as output voltage × output current. It treats input
+power as lost while the input voltage is more than 2 V below the output voltage.
 
-| Frame offset | Payload offset | Type | Field | Unit | Source |
-| --- | --- | --- | --- | --- | --- |
-| 0 | - | u8 | magic `0x51` | - | firmware |
-| 1 | - | u8 | event, see below | - | firmware |
-| 2 | 0 | u16 | DC input voltage | mV | firmware |
-| 4 | 2 | u16 | DC input current | mA | app |
-| 6 | 4 | u16 | DC output voltage | mV | firmware |
-| 8 | 6 | u16 | DC output current | mA | firmware |
-| 10 | 8 | u16 | battery level | 0.1 % | firmware |
-| 12 | 10 | u16 | battery voltage | mV | app |
-| 14 | 12 | 4 × u16 | cell voltages 1-4 | mV | cloud |
-| 22 | 20 | s16 | battery current | mA | firmware |
-| 24 | 22 | s16 | battery temperature | 0.1 °C | firmware |
-| 26 | 24 | u16 | battery cycle count, see below | - | cloud |
-| 28 | 26 | u16 | remaining time, see below | s | firmware |
-| 30 | 28 | u32 | total energy consumed | see below | app |
-| 34 | 32 | 4 bytes | not used, see below | - | - |
-| 38 | 36 | u16 | status flags, see below | bitfield | firmware |
+The input current is not measured. The power board estimates it while input power is
+present, as the output current plus the charging power divided by the input voltage and
+an efficiency of 93 %, plus 10 mA.
 
-Units of the firmware fields follow the front panel's display code:
+The battery voltage is the sum of the cell voltages corrected by the drop over the
+battery's internal resistance (70 mΩ by default), so it is above the measured voltage
+while discharging and below it while charging.
 
-- Voltage, current and power are shown with one decimal.
-- Output power is computed as output voltage × output current.
-- The front panel treats input power as lost while the input voltage is more than about
-  2 V below the output voltage.
+**Battery level**: the power board counts the charge with the battery monitor and
+corrects the count at rest from the cell voltages. It assumes a capacity of 4200 mAh on
+the W150 and 5000 mAh on the W180. From power-board firmware 1.29 on, the level counts
+only the charge above the reserve capacity the UPS keeps, 18 % by default (see
+[standby](#ups-service)): 0 % means the reserve is reached. Older versions report the
+whole charge.
 
-The app fields use the same scaling as the neighboring firmware fields (÷1000 for V
-and A).
-
-The vendor app calls the battery current "charging current". This suggests that
-positive values mean charging, but it is not confirmed on hardware.
+**Battery temperature**: the front panel shows it rounded to whole degrees and leaves it
+blank outside −40 to 85 °C.
 
 **Event byte**: the front panel sends `0x02` on the sample where input power is lost,
 `0x01` on the sample where it returns and `0x00` otherwise. It sends that sample as an
@@ -163,49 +183,101 @@ extra notification right away. The vendor app labels `0x01` "PowerDown" and `0x0
 Wake-on-LAN outage timer, with `0x01` the delay after input power returns. No event is
 sent for the first sample after boot.
 
-**Remaining time**: the front panel shows payload offset 26 divided by 60 as minutes. It
-does so only under all of these conditions:
+**Battery cycle count**: equivalent full cycles, the charge moved into and out of the
+battery divided by twice the capacity. The power board keeps the count across restarts;
+a factory reset sets it to 0. The frame carries no health value: the vendor cloud
+estimates it from the cycle count as min(100, (1500 - cycles) / 14) %, and the vendor
+app's battery health page shows that estimate. The app's balance rating is computed by
+the cloud from the largest difference between the cell voltages.
+
+**Remaining time**: how long the battery would last at the present output load, from
+the remaining charge, derated by 5 %, and an average of the output current. It counts
+down to an empty battery, including the reserve capacity, although the UPS turns its
+output off when it reaches the reserve. The power board reports `0xFFFF` while the
+output current is too small for an estimate (below about 64 mA) and `0` when the battery
+monitor missed a sample. It computes the value on input power as well. Power-board
+firmware 1.21 works from the battery current instead and reports the time until the
+battery is full while charging.
+
+The front panel shows payload offset 26 divided by 60 as minutes. It does so only under
+all of these conditions:
 
 - status bit 8 is set;
 - at least 30 s have passed since input power was lost or returned;
 - the value is between 31 s and about 16.7 hours.
 
 The vendor cloud reads its remaining seconds from offset 26 as well. The vendor app's
-decoder reads them from offset 24, which the cloud treats as the battery cycle count.
+decoder reads them from offset 24, which holds the cycle count.
 
-**Total energy consumed**: the vendor app divides the raw value by 10⁶. The app shows
-energy statistics in kWh, which suggests the raw unit is mWh. This is not confirmed.
+**Output energy**: the energy delivered at the output, counted while the UPS runs. The
+power board keeps it across restarts, saving it every 2 Wh, so up to 2 Wh are lost when
+it restarts. The vendor app divides the raw value by 10⁶ and shows kWh.
 
-**Battery cycles and health**: the vendor cloud reads the cycle count from payload
-offset 24. The frame carries no health value: the cloud estimates it from the cycle count
-as min(100, (1500 - cycles) / 14) %, and the vendor app's battery health page shows that
-estimate. Neither the front panel nor the app's own decoder reads the cycle count, so its
-position rests on the cloud alone and is not confirmed on hardware. The app's decoder
-reads offsets 32-35 as a 32-bit value but does not use it; the front panel and the cloud
-ignore them too. The app's balance rating is computed by the cloud from the largest
-difference between the cell voltages.
+**Fault flags**: the power board sets these bits while the condition lasts. Bits 0-7
+clear together once the battery is back in range. On an input over-voltage (bit 10) the
+power board also stops powering the output from the battery; the output over-current
+flag (bit 11) is only reported. The front panel and the cloud ignore the fault flags;
+the vendor app's decoder reads them as a 32-bit value without using it.
+
+| Bit | Mask | Condition |
+| --- | --- | --- |
+| 0 | `0x00000001` | cell under-voltage |
+| 1 | `0x00000002` | cell over-voltage |
+| 3 | `0x00000008` | discharge over-current or short circuit |
+| 4 | `0x00000010` | battery monitor not responding |
+| 5 | `0x00000020` | battery monitor alert input |
+| 6 | `0x00000040` | battery monitor chip fault |
+| 8 | `0x00000100` | battery temperature above the high limit: 60 °C (W150), 50 °C (W180) |
+| 9 | `0x00000200` | battery temperature below −10 °C |
+| 10 | `0x00000400` | input voltage more than 1.8 V above the adapter voltage setting |
+| 11 | `0x00000800` | output current above 155 W ÷ adapter voltage setting, at most 11.5 A |
+| 16 | `0x00010000` | a request on the power board's USB interface stalled, until it restarts |
 
 **Status flags**:
 
-| Bit | Mask | Vendor app name | Front-panel use |
-| --- | --- | --- | --- |
-| 2 | `0x0004` | overload | - |
-| 4 | `0x0010` | shutdown imminent | - |
-| 7 | `0x0080` | charging | charging icon |
-| 8 | `0x0100` | discharging | remaining time shown |
-| 10 | `0x0400` | AC OK (input power present) | power icon; buzzer repeat mode beeps while clear |
+| Bit | Mask | Vendor app name | Set while | Front-panel use |
+| --- | --- | --- | --- | --- |
+| 0 | `0x0001` | - | always | - |
+| 2 | `0x0004` | overload | on battery with more than 120 W output, only reported | - |
+| 3 | `0x0008` | - | battery temperature above the high limit, see fault bit 8 | - |
+| 4 | `0x0010` | shutdown imminent | on battery below 25 % of the whole charge, or below the shutdown reserve if that is higher | - |
+| 5 | `0x0020` | - | charge below the reserve capacity | - |
+| 7 | `0x0080` | charging | not on battery and the battery current is above 20 mA | charging icon |
+| 8 | `0x0100` | discharging | on battery: set when input power is lost, cleared about 30 s after it returns | remaining time shown |
+| 10 | `0x0400` | AC OK | input voltage above the power-good threshold, see adapter settings | power icon; buzzer repeat mode beeps while clear |
 
-The other bits are not used by either.
+The other bits are never set. On firmware 1.29 with the default reserve, bit 4 is set
+below a battery level of about 8.5 %, and bit 5 together with a battery level of 0 %.
 
 ## Power-board link
 
 For context: the power-board MCU talks to the front panel over UART1 at 19200 baud, 8N1.
 Frames in both directions are `0xA0, command, length (u16 LE), payload, CRC` with
 CRC-16/X.25 (polynomial 0x1021 reflected, init 0xFFFF, final XOR 0xFFFF) over everything
-before the CRC. The power board replies with the command byte it received. The front
-panel polls telemetry with command `0x01`. At boot it reads the adapter settings
-(`0x03`) and standby settings (`0x07`) from the power board, so the power board holds the
-authoritative copy of both. Changes are forwarded with commands `0x13` and `0x17`.
+before the CRC. The power board answers a request with the command byte it received. It
+keeps the adapter and standby settings in its EEPROM, and the front panel reads them at
+boot.
+
+| Command | Payload | Front panel sends it | Meaning |
+| --- | --- | --- | --- |
+| `0x01` | - | periodically and on a write to `0xF0B5` | telemetry block, which the power board also sends on its own |
+| `0x03`, `0x13` | 5 × u16 | at boot, on a write to `0xF0B2` | read and write the adapter settings |
+| `0x07`, `0x17` | 5 × u16 | at boot, on a write to `0xF0B4` | read and write the standby settings |
+| `0x0A` | - | at boot | versions, see the info block |
+| `0x18` | u8 | on a write to `0xF0B7` | USB wake-up setting |
+| `0x20` | magic `0x5A1B0671` | on a write to `0xF0B6` | restore the defaults |
+| `0x21` | 6 bytes | at boot | the front panel's MAC |
+| `0x22` | magic `0x5A1B0672` | on request of the vendor cloud | restart the power board |
+| `0x80`-`0x85` | - | during a firmware update from the vendor cloud | update the power board |
+
+Writes of settings are answered with the number of fields the power board rejected, but
+the front panel only checks that an answer arrives. The power board also sends button
+events (`0x90`-`0x92`), which the front panel forwards to the vendor cloud only, and a
+notice when it goes to sleep or shuts down (`0x95`). Its other commands read or reset
+calibration, statistics and factory data; the front panel does not send them.
+
+The power board also has a USB interface, which presents the UPS to a connected computer
+as a USB HID power device and signals a remote wake-up when input power returns.
 
 ## Controls
 
@@ -215,67 +287,113 @@ the front panel's flash and take effect immediately. Values outside the listed r
 are clamped by the device, not rejected, unless noted otherwise. Defaults are the values
 after a factory reset.
 
-The vendor app exposes no switch for the DC output, and none of the mapped commands
-below switches it. The only unmapped command is `0xF0B7`.
+None of the commands switches the DC output, and the vendor app has no switch for it
+either.
 
 ### UPS service
 
 | Characteristic | Write payload | Read payload | Default |
 | --- | --- | --- | --- |
-| `0xF0B2` adapter | 5 × u16, see below | same 5 × u16 | from power board |
+| `0xF0B2` adapter | 5 × u16, see below | same 5 × u16 | see below |
 | `0xF0B3` buzzer | u8: 0 mute, 1 beep when input power is lost or returns, 2 repeat | u8 | 1 |
-| `0xF0B4` standby | u16 time (s, 20-7200), u16 current threshold (mA, 20-3000) | same 2 × u16 | from power board |
+| `0xF0B4` standby | 2 or 5 × u16, see below | first 2 × u16 | see below |
 | `0xF0B5` | empty | - | - |
 | `0xF0B6` reset | empty | - | - |
-| `0xF0B7` | u8, forwarded to the power board | screen-language byte | - |
+| `0xF0B7` | u8, see below | screen-language byte | - |
 | `0xF0B8` language | u8: 0 English, 1 Simplified Chinese | u8 | 0 |
 | `0xF0B9` temperature unit | u8: 0 °C, 1 °F | u8 | 0 |
 
 Values other than 0 and 1 written to `0xF0B8` or `0xF0B9` are stored as 0. The buzzer
-byte is stored as written. In repeat
-mode the buzzer beeps every 2.5 s while status flag bit 10 is clear; the vendor app calls
-that bit "AC OK".
+byte is stored as written. In repeat mode the buzzer beeps every 2.5 s while status flag
+bit 10 is clear; the vendor app calls that bit "AC OK".
 
-**Adapter settings (`0xF0B2`)** tell the UPS how much the upstream power adapter can
-deliver. The front panel validates them and forwards them to the power board:
+**Adapter settings (`0xF0B2`)** tell the UPS which power adapter feeds it. The front
+panel clamps them to its ranges and forwards them to the power board, which checks them
+against its own ranges and keeps the previous value of each field outside them. The
+power board saves the settings but applies them only when it starts. That is why the
+vendor app asks for a restart with the reset hole on the front panel.
 
-| Payload offset | Field | Unit | Device range | Vendor app value |
-| --- | --- | --- | --- | --- |
-| 0 | adapter current | mA | 2000-10000 | entered current |
-| 2 | charge current limit | mA | 1000 to adapter current - 1000 | 70 % of adapter current |
-| 4 | adapter voltage | mV | 5000-20200 | entered voltage |
-| 6 | stop-charge threshold | mV | voltage - 1500 to voltage - 150 | 96.5 % of voltage |
-| 8 | power-good threshold | mV | voltage - 2500 to voltage - 300 | 95.8 % of voltage |
+| Payload offset | Field | Unit | Front-panel range | Power-board range | Vendor app value | Default |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | adapter current | mA | 2000-10000 | 1000-10000 | entered current | 8000 |
+| 2 | charge current limit | mA | 1000 to adapter current - 1000 | 500 to adapter current - 800 | 70 % of adapter current | 5000 |
+| 4 | adapter voltage | mV | 5000-20200 | 5000-20000 | entered voltage | 12000 |
+| 6 | stop-charge threshold | mV | voltage - 1500 to voltage - 150 | voltage - 2000 to voltage - 100 | 96.5 % of voltage | 11580 |
+| 8 | power-good threshold | mV | voltage - 2500 to voltage - 300 | voltage - 2000 to voltage - 200 | 95.8 % of voltage | 11496 |
+
+What the values control:
+
+- The adapter voltage is also the output voltage the UPS generates on battery. The
+  output current limit (155 W divided by it) and the input over-voltage limit (1.8 V
+  above it) follow from it as well.
+- The stop-charge threshold is the charger's input voltage limit: when the adapter's
+  voltage sags to it, the charger reduces the charging current. If it is above the
+  voltage the adapter delivers, the battery does not charge; the vendor app recommends
+  lowering the entered voltage in that case.
+- Below the power-good threshold the input counts as lost and the UPS runs from the
+  battery (status flag bit 10). The vendor app calls it the power-off voltage.
+- The adapter current and the charge current limit set the charger's current limits;
+  how exactly is not confirmed.
 
 The device then notifies `0xF0B2` with the plaintext frame `0x51, 0x00, 0x00, status`:
 status 0 means the power board answered within 200 ms, 1 that the front panel did not see
 the answer. The front panel only looks at the first message from the power board in that
 window, so another message arriving first also gives status 1, and resending the block
-is harmless. The front panel keeps the written block before forwarding it, so reads
-return it even after status 1, until the front panel restarts. According
-to the vendor app, the new settings take effect only after the UPS is restarted with the
-reset hole on the front panel. Wrong values can stop the battery from charging.
+is harmless. A field the power board rejected is still confirmed with status 0. The
+front panel keeps the written block before forwarding it, so reads return it even when
+the power board did not take it, until the front panel restarts.
 
-**Standby (`0xF0B4`)**: according to the vendor app, the UPS goes into standby when the
-output current stays below the threshold for the configured time. The power board keeps
-three further u16 values in the same block, which the device accepts as an optional
-6-byte extension (ranges 100-900, 20-7200 and 100-800). Their meaning is not known and
-the vendor app does not send them. Standby writes are confirmed like adapter writes, with
-a notification on `0xF0B4` even though that characteristic does not declare Notify.
-Clients such as BlueZ do not deliver notifications of a characteristic without that
-property, so this result cannot be received.
+**Standby (`0xF0B4`)**: the power board keeps five values. The vendor app reads and
+writes only the first two.
+
+| Payload offset | Field | Unit | Front-panel range | Power-board range | Default |
+| --- | --- | --- | --- | --- | --- |
+| 0 | sleep time | s | 20-7200 | 20-7200 | 600 |
+| 2 | sleep current threshold | mA | 20-3000 | 20-3000, before firmware 1.29: 20-2000 | 150 |
+| 4 | reserve capacity | 0.1 % | 100-900 | 50-600 | 180 |
+| 6 | shutdown time | h | 20-7200 | 2-1440 | 72 |
+| 8 | shutdown reserve | 0.1 % | 100-800 | 10-600 | 10 |
+
+A write carries either the first two values or all five. The front panel keeps the
+other three from the copy it read from the power board at boot and always forwards all
+five. A read returns only the first two; the rest of the response is not initialized.
+The power board keeps the previous value of each field outside its range and then does
+not save the block, so the other changes last only until it restarts.
+
+- While the UPS runs from the battery and its output current stays below the threshold
+  for the sleep time, it goes to sleep and turns its output off. It also sleeps on
+  battery when the charge falls to the reserve capacity, when the battery voltage drops
+  under high load, at a high battery current and when the battery overheats.
+- On input power the sleep time does not run. A sleeping UPS wakes up when input power
+  returns or the front-panel button is pressed, not when the load rises again. After the
+  shutdown time on battery, or below 5 % charge, it shuts down completely and starts
+  again only when input power returns.
+- From power-board firmware 1.29 on, the battery level counts from the reserve capacity
+  up, see [Telemetry](#telemetry). Status flag bit 4 uses the shutdown reserve when it is
+  above 25 %.
+
+Standby writes are confirmed like adapter writes, with a notification on `0xF0B4` even
+though that characteristic does not declare Notify. Clients such as BlueZ do not deliver
+notifications of a characteristic without that property, so this result cannot be
+received.
 
 **`0xF0B5` and `0xF0B6`**: the vendor app's "Restore System Settings" action writes
-`0xF0B5`. In the analyzed firmware (v1.0-37), `0xF0B5` only requests a fresh telemetry
-sample from the power board. The factory reset is on `0xF0B6`: it sends a reset command
-to the power board and restores the front-panel defaults listed here, including the
-screen settings, and clears the Wake-on-LAN list.
+`0xF0B5`. In every analyzed front-panel version, `0xF0B5` only requests a fresh
+telemetry sample, so the action has no effect. The factory reset is on `0xF0B6`:
 
-**`0xF0B7` (unmapped)**: a write forwards the first payload byte to the power board as
-command `0x18`. The result is notified on `0xF0B7` in the same way as for `0xF0B2`. A
-read returns the screen-language byte. The vendor app never uses `0xF0B7`, and the
-power-board firmware is not available, so the effect is unknown. Do not write it except
-in a deliberate hardware test.
+- The power board restores its defaults listed here, which fit a 12 V adapter, and sets
+  the cycle count to 0. Power-board firmware 1.29 then restarts.
+- The front panel restores its defaults listed here, including the screen settings, and
+  clears the Wake-on-LAN list. It keeps the Wi-Fi credentials and does not restart.
+
+With another adapter, the adapter settings have to be entered again after a reset.
+
+**`0xF0B7`**: a write forwards the first payload byte to the power board as command
+`0x18`. While the value is not 0, the power board stops re-attaching its USB interface
+periodically to wake the connected computer. The value is not saved and returns to 0
+when the power board restarts. The result is notified on `0xF0B7` in the same way as for
+`0xF0B2`. A read returns the screen-language byte. The vendor app never uses `0xF0B7`,
+and power-board firmware 1.21 does not know the command.
 
 **Info block (`0xF0BF`)**: 10 bytes, zero padded to a block:
 
@@ -283,10 +401,10 @@ in a deliberate hardware test.
 | --- | --- | --- |
 | 0 | u8 | magic `0x51` |
 | 1 | u8 | not initialized |
-| 2 | u16 | power-board hardware version |
-| 4 | u16 | power-board firmware version |
-| 6 | u16 | front-panel hardware version, 3 in the analyzed firmware |
-| 8 | u16 | front-panel firmware version, 19 in the analyzed firmware |
+| 2 | u16 | power-board hardware version: 3 on the W150, 4 on the W180 |
+| 4 | u16 | power-board firmware version, e.g. 29 |
+| 6 | u16 | front-panel hardware version, 3 in all analyzed versions |
+| 8 | u16 | front-panel firmware version, 16-20 in the analyzed versions |
 
 The front panel asks the power board for its two versions over UART (command `0x0A`) at
 boot and reports 0 for both if it gets no answer. It sends the same four values to the
@@ -298,13 +416,13 @@ they do not match the raw numbers.
 
 | Type | Payload | Meaning |
 | --- | --- | --- |
-| `0x01` | - | request Wi-Fi status |
-| `0x02` | - | request Wi-Fi scan |
-| `0x04` | 96 bytes | set Wi-Fi credentials |
+| `0x01` | - | request Wi-Fi status, answered as type `0x01` |
+| `0x02` | - | start a Wi-Fi scan, answered as type `0x03` |
+| `0x04` | 32-byte SSID, 64-byte password, both zero padded | set Wi-Fi credentials |
 | `0x05` | 6-byte MAC | add Wake-on-LAN target (at most 8) |
 | `0x06` | 6-byte MAC | remove Wake-on-LAN target |
 | `0x07` | - | clear Wake-on-LAN targets |
-| `0x08` | - | request Wake-on-LAN targets |
+| `0x08` | - | request Wake-on-LAN targets, answered as type `0x08` with u8 count and the MACs |
 | `0x09` | 3 × u16 | set Wake-on-LAN trigger, see below |
 | `0x0A` | - | request Wake-on-LAN trigger, answered as type `0x0A` |
 | `0x0B` | u32 timeout (s, at least 30; `0xFFFFFFFF` keeps the screen on), optional u8 idle backlight (%, up to 100) | set screen timeout |
@@ -312,7 +430,12 @@ they do not match the raw numbers.
 | `0x0D` | u8 backlight (%, 20-100) | set active backlight |
 | `0x0E` | - | request active backlight, answered as type `0x0E` with u8 backlight |
 
-Set requests are not answered.
+Set requests are not answered. After new Wi-Fi credentials the front panel reconnects
+without restarting. Type `0x10` is accepted but has no effect. Type `0x03` is only used
+for scan results: a write of it makes the front panel read through a null pointer.
+
+The **Wi-Fi scan** result is one notification that packs one record per network, s8
+signal strength (dBm), u8 SSID length and the SSID, until the payload exceeds 200 bytes.
 
 After the screen timeout expires without interaction, the screen switches to its idle
 view at the idle backlight level. Defaults: timeout 300 s, both backlight levels 70 %.
@@ -344,11 +467,10 @@ its network connection after an outage. Its payload is three u16 values:
 
 Defaults: 30 s, 30 s, 35 %.
 
-Types `0x03` and `0x10` exist in the firmware but are not used by the vendor app.
-
 The integration exposes the settings of the vendor app's advanced configuration page:
 adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
 exposes both screen backlight levels, the versions from the info block, the event byte
 and the Wi-Fi status, which it requests every minute. It waits for the result of adapter
 writes and sends an unconfirmed block once more; standby writes stay unconfirmed. The
-factory reset, `0xF0B7`, Wake-on-LAN and Wi-Fi setup are not exposed.
+factory reset, `0xF0B7`, the last three standby values, Wake-on-LAN and Wi-Fi setup are
+not exposed.

@@ -201,6 +201,21 @@
       "shutdown_imminent": {
         "name": "Shutdown Imminent"
       },
+      "battery_fault": {
+        "name": "Battery Fault"
+      },
+      "over_temperature": {
+        "name": "Battery Overheating"
+      },
+      "under_temperature": {
+        "name": "Battery Too Cold"
+      },
+      "input_over_voltage": {
+        "name": "Input Overvoltage"
+      },
+      "output_over_current": {
+        "name": "Output Overcurrent"
+      },
       "wifi_connected": {
         "name": "Wi-Fi"
       }
@@ -297,7 +312,7 @@
         "name": "Output Power"
       },
       "temperature": {
-        "name": "Temperature"
+        "name": "Battery Temperature"
       },
       "remaining_time_discharging": {
         "name": "Discharge Time Remaining"

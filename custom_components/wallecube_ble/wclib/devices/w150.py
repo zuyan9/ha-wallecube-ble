@@ -35,7 +35,7 @@ from ..model.wifi_status import ipv4
 from ..packet import COMMAND_CONFIRMED, ConfigMessage, TelemetryFrame
 from ..props import Field, dataclass_attr_mapper, raw_field
 from ..props.raw_data_props import RawDataProps
-from ..props.transforms import pdiv, prop_has_bit_on
+from ..props.transforms import pdiv, prop_has_any_bit_on, prop_has_bit_on
 
 tele = dataclass_attr_mapper(UpsTelemetry)
 info = dataclass_attr_mapper(InfoBlock)
@@ -44,10 +44,24 @@ info = dataclass_attr_mapper(InfoBlock)
 # remaining time in that state
 _on_battery = prop_has_bit_on(8)
 
+# remaining time the power board reports when it has no load to estimate from, and
+# when its battery monitor missed a sample
+_RUNTIME_UNKNOWN = (0xFFFF, 0)
+
+# first power-board firmware version that accepts standby thresholds above 2000 mA
+_STANDBY_CURRENT_3000MA_FIRMWARE = 29
+
 
 def _known_version(value: int | None) -> int | None:
     # 0 means the power board did not report its versions
     return value or None
+
+
+def _battery_temperature(value: int | None) -> float | None:
+    # the front panel leaves the temperature blank outside this range
+    if value is None or not -400 <= value <= 850:
+        return None
+    return value / 10
 
 
 class BuzzerMode(enum.IntEnum):
@@ -110,9 +124,10 @@ class Device(DeviceBase, RawDataProps):
     dc_input_current = raw_field(tele.dc_input_current, pdiv(1000, 3))
     dc_output_voltage = raw_field(tele.dc_output_voltage, pdiv(1000, 3))
     dc_output_current = raw_field(tele.dc_output_current, pdiv(1000, 3))
-    temperature = raw_field(tele.temperature, pdiv(10, 1))
+    temperature = raw_field(tele.temperature, _battery_temperature)
     energy_total = raw_field(tele.energy_total, pdiv(1_000_000, 3))
     status_flags = raw_field(tele.status_flags)
+    fault_flags = raw_field(tele.fault_flags)
 
     cell_voltage_1 = raw_field(tele.cell_voltage_1, pdiv(1000, 3))
     cell_voltage_2 = raw_field(tele.cell_voltage_2, pdiv(1000, 3))
@@ -128,6 +143,14 @@ class Device(DeviceBase, RawDataProps):
     charging = raw_field(tele.status_flags, prop_has_bit_on(7))
     discharging = raw_field(tele.status_flags, _on_battery)
     input_power_ok = raw_field(tele.status_flags, prop_has_bit_on(10))
+    # the vendor app ignores these conditions, they follow the power-board firmware
+    over_temperature = raw_field(tele.status_flags, prop_has_bit_on(3))
+    # cell under- or over-voltage, discharge over-current or short circuit, or a
+    # failure of the battery monitor chip
+    battery_fault = raw_field(tele.fault_flags, prop_has_any_bit_on(0, 1, 3, 4, 5, 6))
+    under_temperature = raw_field(tele.fault_flags, prop_has_bit_on(9))
+    input_over_voltage = raw_field(tele.fault_flags, prop_has_bit_on(10))
+    output_over_current = raw_field(tele.fault_flags, prop_has_bit_on(11))
 
     output_power = Field[float]()
     remaining_time_discharging = Field[int]()
@@ -185,6 +208,14 @@ class Device(DeviceBase, RawDataProps):
             or UPS_SERVICE_UUID in adv_data.service_uuids
         )
 
+    @property
+    def device(self):
+        # the models share the front-panel firmware, the power board reports its model
+        # as the hardware version in the info block read while connecting
+        if self.power_board_hardware_version == 4:
+            return "W180"
+        return "W150"
+
     async def data_parse(self, frame: bytes) -> bool:
         self.reset_updated()
 
@@ -216,7 +247,7 @@ class Device(DeviceBase, RawDataProps):
 
         self.remaining_time_discharging = (
             round(telemetry.remaining_time / 60)
-            if telemetry.remaining_time is not None
+            if telemetry.remaining_time not in (None, *_RUNTIME_UNKNOWN)
             and _on_battery(telemetry.status_flags)
             else None
         )
@@ -296,8 +327,7 @@ class Device(DeviceBase, RawDataProps):
             self._request_wifi_status,
         )
         for read in readers:
-            # older firmware lacks some settings and a single read can fail, the
-            # others are still usable
+            # a single read can fail, the others are still usable
             try:
                 await read()
             except (UnsupportedBluetoothProtocol, PacketParseError) as e:
@@ -311,7 +341,9 @@ class Device(DeviceBase, RawDataProps):
     async def poll(self) -> None:
         await self._request_wifi_status()
 
-    @controls.voltage(adapter_voltage, min=5.0, max=20.2, step=0.1, enabled=False)
+    # the front panel accepts up to 20.2 V, but the power board keeps its previous
+    # voltage for values above 20 V while the write is still confirmed
+    @controls.voltage(adapter_voltage, min=5.0, max=20.0, step=0.1, enabled=False)
     async def set_adapter_voltage(self, volts: float) -> None:
         await self._write_adapter(voltage=volts)
 
@@ -325,6 +357,11 @@ class Device(DeviceBase, RawDataProps):
 
     @controls.current_ma(standby_current_threshold, min=20, max=3000)
     async def set_standby_current_threshold(self, milliamperes: float) -> None:
+        # power-board firmware before 1.29 keeps its previous threshold above 2000 mA,
+        # while the front panel still reports the written value
+        version = self.power_board_firmware_version
+        if version is not None and version < _STANDBY_CURRENT_3000MA_FIRMWARE:
+            milliamperes = min(milliamperes, 2000)
         await self._write_standby(current_threshold=round(milliamperes))
 
     @controls.duration(screen_timeout, min=30, max=36000)
@@ -347,7 +384,12 @@ class Device(DeviceBase, RawDataProps):
     async def set_screen_idle_brightness(self, percent: float) -> None:
         await self._write_screen_idle_brightness(round(percent))
 
-    @controls.select(temperature_unit, options=TemperatureUnit)
+    # front-panel firmware before 1.18 has no temperature unit setting
+    @controls.select(
+        temperature_unit,
+        options=TemperatureUnit,
+        characteristic=TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
+    )
     async def set_temperature_unit(self, unit: TemperatureUnit) -> None:
         await self.send_command(TEMPERATURE_UNIT_CHARACTERISTIC_UUID, bytes([unit]))
         await self._read_temperature_unit()
@@ -501,6 +543,9 @@ class Device(DeviceBase, RawDataProps):
     async def _read_enum[E: enum.IntEnum](
         self, characteristic: str, enum_type: type[E]
     ):
+        # the setting does not exist in this firmware version
+        if not self.has_characteristic(characteristic):
+            return None
         payload = await self.read_value(characteristic)
         if not payload:
             return None

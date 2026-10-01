@@ -136,6 +136,15 @@ def test_device_info_carries_front_panel_versions(device: Device):
 
     assert info["sw_version"] == "19"
     assert info["hw_version"] == "3"
+    assert info["model"] == "W150"
+
+
+def test_device_info_names_the_model_the_power_board_reports(device: Device):
+    device.info_parse(bytes.fromhex("00 0400 1d00 0300 1400") + bytes(6))
+
+    info = WalleCubeSensor(device, "battery_level").device_info
+
+    assert info["model"] == "W180"
 
 
 def test_brightness_is_a_percentage_slider(device: Device):

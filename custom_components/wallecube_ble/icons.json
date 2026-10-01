@@ -12,6 +12,15 @@
         "state": {
           "off": "mdi:wifi-off"
         }
+      },
+      "battery_fault": {
+        "default": "mdi:battery-alert-variant-outline"
+      },
+      "input_over_voltage": {
+        "default": "mdi:flash-alert-outline"
+      },
+      "output_over_current": {
+        "default": "mdi:current-dc"
       }
     },
     "event": {

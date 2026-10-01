@@ -16,7 +16,7 @@ from custom_components.wallecube_ble.wclib.packet import (
     encode_config_message,
 )
 
-# vectors computed from the firmware key schedule for two addresses of one unit
+# vectors of the firmware key schedule for two addresses of one (synthetic) unit
 KEY_VECTORS = [
     ("0a1b2c3d4e50", "12226d8d36e6bfcd93be41626e885160", 0x93BE4162),
     ("0a1b2c3d4e52", "74711d0562d0c80ca1c8baf7302a1a99", 0xA1C8BAF7),

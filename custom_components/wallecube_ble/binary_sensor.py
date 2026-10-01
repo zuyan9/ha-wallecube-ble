@@ -70,6 +70,15 @@ _BINARY_SENSORS: Final[dict[str, BinarySensorEntityDescription]] = {
     "discharging": _make_desc(None),
     "overload": problem(entity_category=EntityCategory.DIAGNOSTIC),
     "shutdown_imminent": problem(entity_category=EntityCategory.DIAGNOSTIC),
+    "battery_fault": problem(entity_category=EntityCategory.DIAGNOSTIC),
+    "over_temperature": _make_desc(
+        BinarySensorDeviceClass.HEAT, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "under_temperature": _make_desc(
+        BinarySensorDeviceClass.COLD, entity_category=EntityCategory.DIAGNOSTIC
+    ),
+    "input_over_voltage": problem(entity_category=EntityCategory.DIAGNOSTIC),
+    "output_over_current": problem(entity_category=EntityCategory.DIAGNOSTIC),
     "wifi_connected": _make_desc(
         BinarySensorDeviceClass.CONNECTIVITY, entity_category=EntityCategory.DIAGNOSTIC
     ),

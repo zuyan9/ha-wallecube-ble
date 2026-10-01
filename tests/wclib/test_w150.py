@@ -36,12 +36,13 @@ def telemetry_frame(
     cycles: int = 12,
     remaining_seconds: int = 7_260,
     energy_raw: int = 1_234_567,
+    fault_flags: int = 0,
     status_flags: int = 0,
     event: int = 0,
 ) -> bytes:
     """Build a 40-byte telemetry notification: magic, event byte, 38-byte payload"""
     payload = struct.pack(
-        "<HHHHHH4HhhHHI4sH",
+        "<HHHHHH4HhhHHIIH",
         input_mv,
         input_ma,
         output_mv,
@@ -54,7 +55,7 @@ def telemetry_frame(
         cycles,
         remaining_seconds,
         energy_raw,
-        bytes(4),
+        fault_flags,
         status_flags,
     )
     assert len(payload) == 38
@@ -144,18 +145,47 @@ async def test_battery_health_is_estimated_from_cycles_like_the_vendor_cloud(
     ("bit", "field_name"),
     [
         (2, "overload"),
+        (3, "over_temperature"),
         (4, "shutdown_imminent"),
         (7, "charging"),
         (8, "discharging"),
         (10, "input_power_ok"),
+        # always set by the power board
+        (0, None),
     ],
 )
-async def test_maps_status_flag_bits(device: Device, bit: int, field_name: str):
+async def test_maps_status_flag_bits(device: Device, bit: int, field_name: str | None):
     await device.data_parse(telemetry_frame(status_flags=1 << bit))
 
-    flags = ("overload", "shutdown_imminent", "charging", "discharging")
-    for name in (*flags, "input_power_ok"):
+    flags = ("overload", "over_temperature", "shutdown_imminent", "charging")
+    for name in (*flags, "discharging", "input_power_ok"):
         assert getattr(device, name) is (name == field_name)
+
+
+@pytest.mark.parametrize(
+    ("bit", "field_name"),
+    [
+        (0, "battery_fault"),  # cell under-voltage
+        (1, "battery_fault"),  # cell over-voltage
+        (3, "battery_fault"),  # discharge over-current or short circuit
+        (4, "battery_fault"),  # battery monitor not responding
+        (5, "battery_fault"),  # battery monitor alert input
+        (6, "battery_fault"),  # battery monitor chip fault
+        (9, "under_temperature"),
+        (10, "input_over_voltage"),
+        (11, "output_over_current"),
+        # over-temperature is also a status flag, a stalled USB request is no fault
+        (8, None),
+        (16, None),
+    ],
+)
+async def test_maps_fault_flag_bits(device: Device, bit: int, field_name: str | None):
+    await device.data_parse(telemetry_frame(fault_flags=1 << bit))
+
+    faults = ("battery_fault", "under_temperature", "input_over_voltage")
+    for name in (*faults, "output_over_current"):
+        assert getattr(device, name) is (name == field_name)
+    assert device.over_temperature is False
 
 
 async def test_remaining_time_only_while_on_battery(device: Device):
@@ -164,6 +194,35 @@ async def test_remaining_time_only_while_on_battery(device: Device):
 
     await device.data_parse(telemetry_frame(status_flags=ON_BATTERY))
     assert device.remaining_time_discharging == 121
+
+
+@pytest.mark.parametrize(
+    "remaining_seconds",
+    [
+        0xFFFF,  # no load to estimate from
+        0,  # the battery monitor missed a sample
+    ],
+)
+async def test_remaining_time_without_an_estimate_is_unknown(
+    device: Device, remaining_seconds: int
+):
+    await device.data_parse(
+        telemetry_frame(remaining_seconds=remaining_seconds, status_flags=ON_BATTERY)
+    )
+
+    assert device.remaining_time_discharging is None
+
+
+@pytest.mark.parametrize(
+    ("decidegrees", "expected"),
+    [(253, 25.3), (-400, -40.0), (850, 85.0), (-401, None), (851, None)],
+)
+async def test_battery_temperature_outside_the_displayed_range_is_unknown(
+    device: Device, decidegrees: int, expected: float | None
+):
+    await device.data_parse(telemetry_frame(temperature_decidegrees=decidegrees))
+
+    assert device.temperature == expected
 
 
 async def test_notifies_only_changed_fields(device: Device, mocker: MockerFixture):
@@ -250,6 +309,25 @@ def test_parses_versions_from_info_block(device: Device):
     assert device.power_board_firmware_version == 29
     assert device.hardware_version == 3
     assert device.firmware_version == 19
+
+
+@pytest.mark.parametrize(
+    ("info", "model"),
+    [
+        ("00 0300 1d00 0300 1300", "W150"),
+        ("00 0400 1d00 0300 1300", "W180"),
+        # the power board did not answer
+        ("00 0000 0000 0300 1300", "W150"),
+    ],
+)
+def test_model_follows_power_board_hardware_version(
+    device: Device, info: str, model: str
+):
+    assert device.device == "W150"
+
+    device.info_parse(bytes.fromhex(info) + bytes(6))
+
+    assert device.device == model
 
 
 def test_power_board_versions_are_unknown_when_not_reported(device: Device):

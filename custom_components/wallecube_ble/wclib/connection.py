@@ -181,6 +181,7 @@ class Connection:
         self._base_mac_offset: int | None = None
         self._base_mac_from_name = False
         self._info: bytes = b""
+        self._characteristics: frozenset[str] | None = None
         self._warned_truncated_config = False
 
         self._errors = 0
@@ -232,6 +233,11 @@ class Connection:
     def info(self) -> bytes:
         """Payload of the info characteristic read while establishing the session"""
         return self._info
+
+    @property
+    def characteristics(self) -> frozenset[str] | None:
+        """UUIDs of the characteristics the device exposed, None before connecting"""
+        return self._characteristics
 
     def on_disconnect(self, listener: DisconnectListener):
         """
@@ -316,6 +322,10 @@ class Connection:
         self._set_state(ConnectionState.CONNECTED)
         self._logger.info("Connected, establishing session")
         self._errors = 0
+        # kept after disconnecting: the set only changes with a firmware update
+        self._characteristics = frozenset(
+            c.uuid for c in self._client.services.characteristics.values()
+        )
 
         try:
             await self._establish_session()

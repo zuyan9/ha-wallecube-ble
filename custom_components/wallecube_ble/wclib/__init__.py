@@ -21,10 +21,15 @@ def NewDevice(ble_dev: BLEDevice, adv_data: AdvertisementData) -> DeviceBase | N
 def get_controls[C: controls.ControlType](
     device: DeviceBase, control_type: type[C]
 ) -> list[C]:
-    """Return the controls of the given type the device declares"""
+    """Return the controls of the given type the device declares and supports"""
     if not isinstance(device, UpdatableProps):
         return []
-    return device.get_controls(control_type)
+    return [
+        control
+        for control in device.get_controls(control_type)
+        if control.characteristic is None
+        or device.has_characteristic(control.characteristic)
+    ]
 
 
 __all__ = [
