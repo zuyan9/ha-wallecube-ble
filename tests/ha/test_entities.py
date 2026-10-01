@@ -145,6 +145,7 @@ def test_device_info_names_the_model_the_power_board_reports(device: Device):
     info = WalleCubeSensor(device, "battery_level").device_info
 
     assert info["model"] == "W180"
+    assert info["name"] == "W180-4E52"
 
 
 def test_brightness_is_a_percentage_slider(device: Device):

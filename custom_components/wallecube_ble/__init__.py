@@ -141,7 +141,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
             severity=ir.IssueSeverity.ERROR,
             translation_key="max_connection_attempts_reached",
             translation_placeholders={
-                "device_name": device.name,
+                # the device names its model only once connected
+                "device_name": entry.title,
                 "attempts": str(e.attempts),
             },
         )

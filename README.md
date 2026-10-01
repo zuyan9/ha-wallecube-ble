@@ -37,7 +37,7 @@ pairing with the vendor app or account is needed.
 ## Supported Devices
 
 <details>
-<summary><b>W150</b></summary>
+<summary><b>W150 and W180</b></summary>
 
 <br>
 
@@ -79,12 +79,14 @@ at 25 %.
 
 Cell 1–4 Voltage, Max Voltage Difference, Battery Health and Number of Cycles are the
 values of the vendor app's battery health page. The UPS counts full charge cycles but
-does not report a health value: like the vendor cloud, the integration estimates it
-from the number of cycles, from 100 % at up to 100 cycles down to 0 % at 1500. Power
-Event fires *Power Lost* or *Power Restored* when input power is lost or returns.
-Battery Fault, Battery Overheating, Battery Too Cold, Input Overvoltage and Output
-Overcurrent show the protection conditions the UPS reports. Input Overvoltage means that
-the adapter delivers more than 1.8 V above the configured Adapter Voltage.
+does not report a health value: the integration estimates it from the number of cycles
+the way the vendor cloud does for the W150, from 100 % at up to 100 cycles down to 0 %
+at 1500. Power Event fires *Power Lost* or *Power Restored* when input power is lost or
+returns. Battery Fault, Battery Overheating, Battery Too Cold, Input Overvoltage and
+Output Overcurrent show the protection conditions the UPS reports. Battery Overheating
+turns on above 60 °C on the W150 and above 50 °C on the W180, Battery Too Cold below
+−10 °C. Input Overvoltage means that the adapter delivers more than 1.8 V above the
+configured Adapter Voltage.
 The Wi-Fi entities show the UPS's own network connection, which the vendor cloud and
 Wake-on-LAN use; they are updated every minute. The device page shows the front panel's
 firmware and hardware versions and the UPS version entities those of the power board,
@@ -113,13 +115,14 @@ older firmware.
 <br>
 
 > [!NOTE]
-> The W180 runs the same front-panel firmware and telemetry format as the W150 and should
-> work, but it is untested; the device page shows the model its power board reports.
-> According to the vendor apps, the W120 sends an older telemetry format, which the
-> integration does not decode. Wake-on-LAN targets, Wi-Fi setup and the factory reset are
-> not implemented. Please
-> [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if you can
-> help test another model.
+> W180 support is based on its firmware and has not been tested on a W180 yet. Both
+> models run the same front-panel firmware, and the W180's power board, which charges a
+> Li-ion instead of a LiFePO4 battery, reports the same values and accepts the same
+> settings. The device page shows the model once the UPS is connected. According to the
+> vendor apps, the W120 sends an older telemetry format, which the integration does not
+> decode. Wake-on-LAN targets, Wi-Fi setup and the factory reset are not implemented.
+> Please [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if
+> you can help test the W180 or another model.
 
 ---
 

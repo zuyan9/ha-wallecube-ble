@@ -58,8 +58,7 @@ class DeviceBase(abc.ABC):
         self._address = ble_dev.address
         # the device advertises no serial number, the BLE address is its stable id
         self._identifier = self._address.replace(":", "").upper()
-        self._default_name = self.NAME_PREFIX + self._identifier[-4:]
-        self._name = self._default_name
+        self._name: str | None = None
         self._local_name = adv_data.local_name
         self._base_mac_hint = base_mac_from_local_name(adv_data.local_name)
 
@@ -100,7 +99,10 @@ class DeviceBase(abc.ABC):
 
     @property
     def name(self) -> str:
-        return self._name
+        if self._name is not None:
+            return self._name
+        # built on access, the prefix can name the model once the device reported it
+        return self.NAME_PREFIX + self._identifier[-4:]
 
     @property
     def local_name(self) -> str | None:

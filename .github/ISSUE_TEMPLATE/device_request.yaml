@@ -1,5 +1,5 @@
 name: New device support
-description: A WalleCube model other than the W150 that isn't recognized or doesn't work
+description: A WalleCube model other than the W150 and W180 that isn't recognized or doesn't work
 title: "[Device]: "
 labels: ["new device"]
 body:

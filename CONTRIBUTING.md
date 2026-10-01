@@ -27,7 +27,9 @@ diagnostics download with packet collection enabled lets us check the raw teleme
 
 ### Testing another WalleCube model
 
-Only the W150 is verified. If you own another model, open a
+Only the W150 is tested on hardware; W180 support is based on its firmware. If you own a
+W180, please report whether it works, with a bug report if it does not. For other
+models, open a
 [device request](https://github.com/zuyan9/ha-wallecube-ble/issues/new?template=device_request.yaml)
 with its advertised Bluetooth name and what happens during setup.
 
@@ -134,7 +136,7 @@ custom_components/wallecube_ble/
 ├── switch.py              # On/off settings
 ├── translations/          # User-facing strings
 └── wclib/                 # Home Assistant-independent device library
-    ├── devices/           # One module per device model
+    ├── devices/           # Device modules; w150.py also covers the W180
     ├── model/             # Fixed-width binary message definitions
     ├── props/             # Field descriptors and transforms
     ├── connection.py      # BLE connection, session and state machine

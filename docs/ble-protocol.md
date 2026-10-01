@@ -1,22 +1,29 @@
-# WalleCube W150 BLE protocol
+# WalleCube W150 and W180 BLE protocol
 
-Local Bluetooth LE protocol of the W150 DC UPS as implemented by this integration. It was
-recovered from the firmware of the front panel (ESP32-C3 / ESP8685), which implements
-Bluetooth, and of the power board (HC32L07x), which measures and controls the UPS.
-Statements are verified against that firmware unless marked otherwise. The device's
-separate cloud path (MQTT with JWT authentication) is out of scope.
+Local Bluetooth LE protocol of the W150 and W180 DC UPS as implemented by this
+integration. It was recovered from the firmware of the front panel (ESP32-C3 /
+ESP8685), which implements Bluetooth, and of the power board (HC32L07x), which measures
+and controls the UPS. Statements are verified against that firmware unless marked
+otherwise. The device's separate cloud path (MQTT with JWT authentication) is out of
+scope.
 
 ## Firmware versions
 
-The analysis covers front-panel firmware 1.16 to 1.20 (builds v1.0-25 to v1.0-47) and
-power-board firmware 1.21, 1.27 and 1.29 of the W150. All front-panel versions implement
-the protocol below identically, except that the temperature unit characteristic `0xF0B9`
-only exists from 1.18 on. All power-board versions fill the telemetry block with the same
-layout; where their behavior differs, the text says so. The info characteristic reports
-both versions, see [Controls](#ups-service).
+The analysis covers front-panel firmware 1.16 to 1.20 (builds v1.0-25 to v1.0-47),
+power-board firmware 1.21, 1.27 and 1.29 of the W150 and power-board firmware 1.25, 1.28
+and 1.29 (two builds) of the W180. All front-panel versions implement the protocol below
+identically, except that the temperature unit characteristic `0xF0B9` only exists from
+1.18 on. All power-board versions fill the telemetry block with the same layout; where
+their behavior differs, the text says so. The info characteristic reports both versions,
+see [Controls](#ups-service).
 
-The W180 runs the same front-panel firmware. Its power board (firmware 1.25, 1.28 and
-1.29 analyzed) uses a 4S Li-ion battery instead of 4S LiFePO4 but the same protocol.
+Both models run the same front-panel firmware, which contains no model-specific code.
+The W180's power board charges a 4S Li-ion battery instead of 4S LiFePO4 and is built
+from the same code: it sets the same telemetry fields and flags and accepts the same
+settings, with the same ranges and defaults. The models differ in the battery capacity,
+the battery voltage limits, the high temperature limit and the output current limit;
+where it matters, the text gives the value of each model. The power board reports the
+model in the info block.
 
 ## Advertising
 
@@ -187,7 +194,8 @@ sent for the first sample after boot.
 battery divided by twice the capacity. The power board keeps the count across restarts;
 a factory reset sets it to 0. The frame carries no health value: the vendor cloud
 estimates it from the cycle count as min(100, (1500 - cycles) / 14) %, and the vendor
-app's battery health page shows that estimate. The app's balance rating is computed by
+app's battery health page shows that estimate. This was observed for a W150; the
+cloud's estimate for the W180 is not known. The app's balance rating is computed by
 the cloud from the largest difference between the cell voltages.
 
 **Remaining time**: how long the battery would last at the present output load, from
@@ -230,7 +238,7 @@ the vendor app's decoder reads them as a 32-bit value without using it.
 | 8 | `0x00000100` | battery temperature above the high limit: 60 °C (W150), 50 °C (W180) |
 | 9 | `0x00000200` | battery temperature below −10 °C |
 | 10 | `0x00000400` | input voltage more than 1.8 V above the adapter voltage setting |
-| 11 | `0x00000800` | output current above 155 W ÷ adapter voltage setting, at most 11.5 A |
+| 11 | `0x00000800` | output current above the output current limit, see [adapter settings](#ups-service) |
 | 16 | `0x00010000` | a request on the power board's USB interface stalled, until it restarts |
 
 **Status flags**:
@@ -324,8 +332,9 @@ vendor app asks for a restart with the reset hole on the front panel.
 What the values control:
 
 - The adapter voltage is also the output voltage the UPS generates on battery. The
-  output current limit (155 W divided by it) and the input over-voltage limit (1.8 V
-  above it) follow from it as well.
+  output current limit and the input over-voltage limit (1.8 V above it) follow from it
+  as well. The output current limit is 155 W divided by the adapter voltage, at most
+  11.5 A, on the W150 and 185 W divided by it, at most 12.5 A, on the W180.
 - The stop-charge threshold is the charger's input voltage limit: when the adapter's
   voltage sags to it, the charger reduces the charging current. If it is above the
   voltage the adapter delivers, the battery does not charge; the vendor app recommends

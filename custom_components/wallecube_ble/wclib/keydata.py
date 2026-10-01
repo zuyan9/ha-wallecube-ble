@@ -1,7 +1,7 @@
 """
 Static key material for deriving the BLE session key
 
-The 123-byte constant is compiled into the W150 front-panel firmware. Together with the
+The 123-byte constant is compiled into the front-panel firmware. Together with the
 device's factory MAC address it yields the per-device AES key, see
 `encryption.derive_session_key`.
 """

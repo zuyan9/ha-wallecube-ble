@@ -88,14 +88,15 @@ def test_check_matches_advertised_name_or_service(mocker: MockerFixture):
     assert not Device.check(other)
 
 
-def test_new_device_creates_w150(mocker: MockerFixture, adv_data):
+def test_new_device_is_named_without_a_model(mocker: MockerFixture, adv_data):
     ble_dev = mocker.Mock(address="0A:1B:2C:3D:4E:52")
 
     device = NewDevice(ble_dev, adv_data)
 
+    # the advertisement does not tell the models apart
     assert isinstance(device, Device)
-    assert device.device == "W150"
-    assert device.name == "W150-4E52"
+    assert device.device == "WalleCube UPS"
+    assert device.name == "WalleCube-4E52"
     assert device.base_mac_hint == bytes.fromhex("0a1b2c3d4e50")
 
 
@@ -312,22 +313,29 @@ def test_parses_versions_from_info_block(device: Device):
 
 
 @pytest.mark.parametrize(
-    ("info", "model"),
+    ("info", "model", "name"),
     [
-        ("00 0300 1d00 0300 1300", "W150"),
-        ("00 0400 1d00 0300 1300", "W180"),
+        ("00 0300 1d00 0300 1300", "W150", "W150-4E52"),
+        ("00 0400 1d00 0300 1300", "W180", "W180-4E52"),
         # the power board did not answer
-        ("00 0000 0000 0300 1300", "W150"),
+        ("00 0000 0000 0300 1300", "WalleCube UPS", "WalleCube-4E52"),
     ],
 )
-def test_model_follows_power_board_hardware_version(
-    device: Device, info: str, model: str
+def test_model_and_name_follow_power_board_hardware_version(
+    device: Device, info: str, model: str, name: str
 ):
-    assert device.device == "W150"
-
     device.info_parse(bytes.fromhex(info) + bytes(6))
 
     assert device.device == model
+    assert device.name == name
+
+
+def test_set_name_is_kept_when_the_model_is_known(device: Device):
+    device.with_name("UPS")
+
+    device.info_parse(bytes.fromhex("00 0400 1d00 0300 1300") + bytes(6))
+
+    assert device.name == "UPS"
 
 
 def test_power_board_versions_are_unknown_when_not_reported(device: Device):

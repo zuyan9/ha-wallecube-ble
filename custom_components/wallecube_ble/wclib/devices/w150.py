@@ -51,6 +51,10 @@ _RUNTIME_UNKNOWN = (0xFFFF, 0)
 # first power-board firmware version that accepts standby thresholds above 2000 mA
 _STANDBY_CURRENT_3000MA_FIRMWARE = 29
 
+# models by power-board hardware version. The models share the front-panel firmware
+# and differ only in the power board, which reports the model in the info block.
+_MODELS = {3: "W150", 4: "W180"}
+
 
 def _known_version(value: int | None) -> int | None:
     # 0 means the power board did not report its versions
@@ -111,9 +115,8 @@ DEFAULT_SCREEN_TIMEOUT = 300
 
 
 class Device(DeviceBase, RawDataProps):
-    """W150"""
+    """WalleCube UPS"""
 
-    NAME_PREFIX = "W150-"
     # the device reports Wi-Fi changes only when asked
     POLL_INTERVAL = 60
 
@@ -209,12 +212,19 @@ class Device(DeviceBase, RawDataProps):
         )
 
     @property
-    def device(self):
-        # the models share the front-panel firmware, the power board reports its model
-        # as the hardware version in the info block read while connecting
-        if self.power_board_hardware_version == 4:
-            return "W180"
-        return "W150"
+    def NAME_PREFIX(self) -> str:
+        model = self._model
+        return "WalleCube-" if model is None else f"{model}-"
+
+    @property
+    def device(self) -> str:
+        return self._model or super().device
+
+    @property
+    def _model(self) -> str | None:
+        # unknown until the info block was read while connecting, and when the power
+        # board did not report its versions
+        return _MODELS.get(self.power_board_hardware_version or 0)
 
     async def data_parse(self, frame: bytes) -> bool:
         self.reset_updated()
