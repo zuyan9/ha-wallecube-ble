@@ -126,8 +126,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
     except SessionKeyError as e:
         raise ConfigEntryNotReady(translation_key="session_key_failed") from e
     except UnsupportedBluetoothProtocol as e:
-        await device.disconnect()
-        raise ConfigEntryError(
+        # retried like a failed connect; the connection keeps its attempt count, so a
+        # characteristic that stays missing ends in MaxConnectionAttemptsReached
+        raise ConfigEntryNotReady(
             translation_key="unsupported_protocol",
             translation_placeholders={"error_msg": str(e)},
         ) from e
