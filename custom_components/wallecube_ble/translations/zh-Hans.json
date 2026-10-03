@@ -12,8 +12,7 @@
       "bt_not_found": "未找到设备。如果此错误反复出现，请尝试刷新蓝牙集成",
       "bt_general_error": "无法连接设备，详情请查看日志",
       "session_key_failed": "已连接，但无法与设备建立加密会话",
-      "unsupported_protocol": "设备未提供预期的蓝牙特征，可能运行着不受支持的固件",
-      "error_try_refresh": "会话建立前设备已断开，请重试"
+      "unsupported_protocol": "设备未提供预期的蓝牙特征，可能运行着不受支持的固件"
     },
     "step": {
       "bluetooth_confirm": {
@@ -26,28 +25,13 @@
           "update_period": "处理下一次设备更新前等待的秒数。0 表示立即处理所有更新（会导致大量数据库写入）。"
         },
         "sections": {
-          "log_options": {
-            "name": "日志选项",
-            "description": "详细日志选项。其中大多数会大量写入日志，请勿长时间开启。",
-            "data": {
-              "log_masked": "隐藏敏感信息（公开分享日志时有用）",
-              "log_connection": "记录设备连接详情",
-              "log_messages": "记录解码后的遥测消息",
-              "log_packets": "记录原始遥测帧",
-              "log_encrypted_payloads": "记录加密数据",
-              "log_payloads": "记录解密数据",
-              "log_bleak": "启用 bleak 调试日志级别（不隐藏敏感信息，也不限于此设备）"
-            }
-          },
           "advanced_connection_options": {
             "name": "高级连接选项",
             "description": "这些选项影响蓝牙连接行为，仅在遇到连接问题时更改。",
             "data": {
-              "connection_timeout": "连接超时",
               "bluez_start_notify": "使用 BlueZ start notify"
             },
             "data_description": {
-              "connection_timeout": "等待设备连接并建立会话的秒数。",
               "bluez_start_notify": "如果连接多个 BLE 设备时频繁断开，或日志中出现 `AcquireNotify: Read error` / `Unexpected EOF on notification file handle`，请尝试启用此项。"
             }
           }
@@ -69,28 +53,13 @@
           "update_period": "处理下一次设备更新前等待的秒数。0 表示立即处理所有更新（会导致大量数据库写入）。"
         },
         "sections": {
-          "log_options": {
-            "name": "日志选项",
-            "description": "详细日志选项。其中大多数会大量写入日志，请勿长时间开启。",
-            "data": {
-              "log_masked": "隐藏敏感信息（公开分享日志时有用）",
-              "log_connection": "记录设备连接详情",
-              "log_messages": "记录解码后的遥测消息",
-              "log_packets": "记录原始遥测帧",
-              "log_encrypted_payloads": "记录加密数据",
-              "log_payloads": "记录解密数据",
-              "log_bleak": "启用 bleak 调试日志级别（不隐藏敏感信息，也不限于此设备）"
-            }
-          },
           "advanced_connection_options": {
             "name": "高级连接选项",
             "description": "这些选项影响蓝牙连接行为，仅在遇到连接问题时更改。",
             "data": {
-              "connection_timeout": "连接超时",
               "bluez_start_notify": "使用 BlueZ start notify"
             },
             "data_description": {
-              "connection_timeout": "等待设备连接并建立会话的秒数。",
               "bluez_start_notify": "如果连接多个 BLE 设备时频繁断开，或日志中出现 `AcquireNotify: Read error` / `Unexpected EOF on notification file handle`，请尝试启用此项。"
             }
           }
@@ -109,39 +78,13 @@
           "update_period": "处理下一次设备更新前等待的秒数。0 表示立即处理所有更新（会导致大量数据库写入）。"
         },
         "sections": {
-          "diagnostics_options": {
-            "name": "诊断",
-            "description": "配置诊断数据收集。",
-            "data": {
-              "collect_packets": "启用数据包收集",
-              "collect_packets_amount": "保存的数据包数量"
-            },
-            "data_description": {
-              "collect_packets": "在诊断下载中保存与设备交换的数据。启用后请等待一分钟再下载诊断信息，之后请关闭此选项。下载中只显示设备地址的前半部分，不含 Wi-Fi 网络名称和 IP 地址。"
-            }
-          },
-          "log_options": {
-            "name": "日志选项",
-            "description": "详细日志选项。其中大多数会大量写入日志，请勿长时间开启。",
-            "data": {
-              "log_masked": "隐藏敏感信息（公开分享日志时有用）",
-              "log_connection": "记录设备连接详情",
-              "log_messages": "记录解码后的遥测消息",
-              "log_packets": "记录原始遥测帧",
-              "log_encrypted_payloads": "记录加密数据",
-              "log_payloads": "记录解密数据",
-              "log_bleak": "启用 bleak 调试日志级别（不隐藏敏感信息，也不限于此设备）"
-            }
-          },
           "advanced_connection_options": {
             "name": "高级连接选项",
             "description": "这些选项影响蓝牙连接行为，仅在遇到连接问题时更改。",
             "data": {
-              "connection_timeout": "连接超时",
               "bluez_start_notify": "使用 BlueZ start notify"
             },
             "data_description": {
-              "connection_timeout": "等待设备连接并建立会话的秒数。",
               "bluez_start_notify": "如果连接多个 BLE 设备时频繁断开，或日志中出现 `AcquireNotify: Read error` / `Unexpected EOF on notification file handle`，请尝试启用此项。"
             }
           }
@@ -160,16 +103,13 @@
       "message": "WalleCube BLE 设备不存在"
     },
     "could_not_connect": {
-      "message": "{time} 秒后仍无法连接设备，请查看日志。\n错误信息：{error_msg}"
+      "message": "无法连接设备，请查看日志。\n错误信息：{error_msg}"
     },
     "session_key_failed": {
       "message": "无法与设备建立加密会话"
     },
     "unsupported_protocol": {
       "message": "设备未提供预期的蓝牙特征：{error_msg}"
-    },
-    "failed_after_successful_connection": {
-      "message": "设备已连接但未建立会话，最后状态：{last_state}"
     },
     "setting_failed": {
       "message": "无法更改设置：{error}"

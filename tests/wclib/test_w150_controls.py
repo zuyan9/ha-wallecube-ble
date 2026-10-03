@@ -39,14 +39,6 @@ STANDBY_300S_100MA = struct.pack("<2H", 300, 100) + bytes(11)
 
 
 @pytest.fixture
-def device(mocker: MockerFixture):
-    adv = mocker.MagicMock(local_name="Walle-0A1B2C3D4E50", service_uuids=[])
-    ble_dev = mocker.Mock(address="0A:1B:2C:3D:4E:52")
-    ble_dev.name = adv.local_name
-    return Device(ble_dev, adv)
-
-
-@pytest.fixture
 def results() -> list[int]:
     """Statuses the fake device notifies for forwarded writes, confirmed when empty"""
     return []
@@ -132,39 +124,25 @@ def screen(device: Device, mocker: MockerFixture):
 
 
 def test_declares_controls_of_the_app_settings_page(device: Device):
-    assert {c.key for c in get_controls(device, controls.select)} == {
-        "buzzer_mode",
-        "screen_language",
-        "temperature_unit",
+    # options in the order of the enum values
+    assert {c.key: c.options_str for c in get_controls(device, controls.select)} == {
+        "buzzer_mode": ["mute", "once", "repeat"],
+        "screen_language": ["english", "chinese"],
+        "temperature_unit": ["celsius", "fahrenheit"],
     }
-    assert {c.key for c in get_controls(device, controls.NumberType)} == {
-        "adapter_voltage",
-        "adapter_current",
-        "standby_time",
-        "standby_current_threshold",
-        "screen_timeout",
-        "screen_brightness",
-        "screen_idle_brightness",
+    # the adapter ratings are disabled by default
+    assert {c.key: c.enabled for c in get_controls(device, controls.NumberType)} == {
+        "adapter_voltage": False,
+        "adapter_current": False,
+        "standby_time": True,
+        "standby_current_threshold": True,
+        "screen_timeout": True,
+        "screen_brightness": True,
+        "screen_idle_brightness": True,
     }
     assert [c.key for c in get_controls(device, controls.switch)] == [
         "screen_always_on"
     ]
-
-
-def test_adapter_controls_are_disabled_by_default(device: Device):
-    enabled = {c.key: c.enabled for c in get_controls(device, controls.NumberType)}
-
-    assert enabled["adapter_voltage"] is False
-    assert enabled["adapter_current"] is False
-    assert enabled["standby_time"] is True
-
-
-def test_select_options_follow_enum_order(device: Device):
-    buzzer = next(
-        c for c in get_controls(device, controls.select) if c.key == "buzzer_mode"
-    )
-
-    assert buzzer.options_str == ["mute", "once", "repeat"]
 
 
 async def test_refresh_reads_all_settings(device: Device, settings):
@@ -179,24 +157,6 @@ async def test_refresh_reads_all_settings(device: Device, settings):
     assert device.temperature_unit is TemperatureUnit.CELSIUS
     # screen settings and Wi-Fi status are answered with notifications
     assert device.send_config.await_args_list == [call(0x0C), call(0x0E), call(0x01)]
-
-
-async def test_refresh_skips_missing_characteristics(
-    device: Device, settings, mocker: MockerFixture
-):
-    read = device.read_value
-
-    async def read_value(characteristic: str) -> bytes:
-        if characteristic == TEMPERATURE_UNIT_CHARACTERISTIC_UUID:
-            raise UnsupportedBluetoothProtocol(characteristic, [])
-        return await read(characteristic)
-
-    mocker.patch.object(device, "read_value", side_effect=read_value)
-
-    await device.refresh_settings()
-
-    assert device.temperature_unit is None
-    assert device.buzzer_mode is BuzzerMode.ONCE
 
 
 async def test_settings_missing_in_the_firmware_are_not_offered(
@@ -231,13 +191,13 @@ async def test_select_writes_option_value(device: Device, settings):
         c for c in get_controls(device, controls.select) if c.key == "buzzer_mode"
     )
     state_callback = MagicMock()
-    device.register_state_update_callback(state_callback, "buzzer_mode")
+    device.subscribe("buzzer_mode", state_callback)
 
     await control.set_value_func(device, "repeat")
 
     device.send_command.assert_awaited_once_with(BUZZER_CHARACTERISTIC_UUID, b"\x02")
     assert device.buzzer_mode is BuzzerMode.REPEAT
-    state_callback.assert_called_once_with(BuzzerMode.REPEAT)
+    state_callback.assert_called_once()
 
 
 async def test_unknown_select_value_reads_as_none(device: Device, settings):
@@ -305,15 +265,6 @@ async def test_adapter_write_fails_without_a_result(
     assert device.adapter_current == 3.0
 
 
-async def test_standby_change_keeps_the_other_value(device: Device, settings):
-    await device.set_standby_current_threshold(250)
-
-    device.send_command.assert_awaited_once_with(
-        STANDBY_CHARACTERISTIC_UUID, struct.pack("<2H", 300, 250)
-    )
-    assert device.standby_current_threshold == 250
-
-
 async def test_standby_change_fails_when_current_values_are_unreadable(
     device: Device, settings
 ):
@@ -331,8 +282,10 @@ async def test_number_control_clamps_to_device_range(device: Device, settings):
     )
 
     await control.set_value_func(device, 5)
-
     assert device.send_command.await_args.args[1] == struct.pack("<2H", 20, 100)
+
+    await control.set_value_func(device, 9000)
+    assert device.send_command.await_args.args[1] == struct.pack("<2H", 7200, 100)
 
 
 @pytest.mark.parametrize(
@@ -472,14 +425,6 @@ async def test_disconnected_wifi_status_clears_network_fields(device: Device):
     assert device.wifi_ssid is None
 
 
-async def test_poll_requests_wifi_status(device: Device):
-    device.send_config = AsyncMock()
-
-    await device.poll()
-
-    device.send_config.assert_awaited_once_with(0x01)
-
-
 async def test_ignores_other_config_messages(device: Device):
     message = ConfigMessage(message_type=0x0A, token=0, payload=bytes(6))
 
@@ -506,25 +451,26 @@ async def test_block_change_keeps_values_changed_on_the_device(
 
     await device.set_standby_time(120)
 
-    assert settings[STANDBY_CHARACTERISTIC_UUID][:4] == struct.pack("<2H", 120, 500)
-
-
-async def test_direct_setter_calls_are_clamped_and_accept_option_names(
-    device: Device, settings
-):
-    await device.set_adapter_voltage(50)
-    await device.set_buzzer_mode("mute")
-
-    assert device.adapter_voltage == 20.0
-    assert device.buzzer_mode is BuzzerMode.MUTE
+    # written once, with just the two values of the block
+    device.send_command.assert_awaited_once_with(
+        STANDBY_CHARACTERISTIC_UUID, struct.pack("<2H", 120, 500)
+    )
 
 
 def test_select_control_type_can_be_subscripted():
     assert controls.select[BuzzerMode] is not None
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        # the characteristic is missing in this firmware version
+        UnsupportedBluetoothProtocol(ADAPTER_CHARACTERISTIC_UUID, []),
+        BleakError("read failed"),
+    ],
+)
 async def test_refresh_continues_after_a_failed_read_while_connected(
-    device: Device, settings, mocker: MockerFixture
+    device: Device, settings, mocker: MockerFixture, error: Exception
 ):
     mocker.patch.object(
         Device, "is_connected", new_callable=PropertyMock, return_value=True
@@ -533,7 +479,7 @@ async def test_refresh_continues_after_a_failed_read_while_connected(
 
     async def read_value(characteristic: str) -> bytes:
         if characteristic == ADAPTER_CHARACTERISTIC_UUID:
-            raise BleakError("read failed")
+            raise error
         return await read(characteristic)
 
     mocker.patch.object(device, "read_value", side_effect=read_value)

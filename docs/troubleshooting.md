@@ -27,13 +27,11 @@ The app's cloud functions are not affected.
 
 ## Diagnostics
 
-To report wrong or missing values or connection problems:
-
-1. Open the integration's options (**Configure**) and turn on **Enable packet
-   collection** under **Diagnostics**.
-2. Reproduce the problem, or wait a minute.
-3. Download the diagnostics from the device page and attach the file to your issue.
-4. Turn packet collection off again.
+To report wrong or missing values or connection problems, download the diagnostics from
+the device page right after the problem occurred and attach the file to your issue. The
+download contains the connection history and the last 200 messages exchanged with the
+UPS in each direction, about three and a half minutes of measurements. Both start over
+after a dropped connection.
 
 The download shows only the first half of the UPS's addresses, e.g. `0A:1B:2C:**:**:**`.
 It stores the exchanged data decrypted, but without the session key material and without
@@ -42,10 +40,22 @@ address.
 
 ## Logs
 
-For connection problems, open the integration's options (**Configure**) and turn on
-**Log device connection details** under **Logging Options**. The other logging options
-produce a lot of output, so turn them off again afterwards. **Mask sensitive
-information** masks the device's address in the log.
+For connection problems, open the integration under **Settings → Devices & services**,
+select **Enable debug logging** in its **⋮** menu, reproduce the problem and select
+**Disable debug logging**. Home Assistant then downloads the log. For more detail from
+the Bluetooth stack, do the same for the **Bluetooth** integration.
+
+Before the UPS is set up, the integration has no menu yet: use the `logger.set_level`
+action with `custom_components.wallecube_ble: debug` instead. The same action with
+`bleak: debug` adds the messages of bleak itself, which the Bluetooth integration's debug
+logging leaves out.
+
+The integration's log lines name the UPS by the last four digits of its address, like
+its default name (e.g. `W150-4E52`), and connection errors add the first half of the
+address, e.g. `0A:1B:2C:**:**:**`, so together they hide only one of its six parts.
+Other lines, especially those of the Bluetooth libraries, can contain the full address,
+also written with underscores (`dev_0A_1B_…`), and the advertised name `Walle-…`, which
+contains the factory MAC. Replace them before posting a log.
 
 ## Security
 

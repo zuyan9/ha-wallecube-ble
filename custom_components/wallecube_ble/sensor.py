@@ -1,7 +1,6 @@
 """WalleCube BLE sensor"""
 
-from dataclasses import dataclass, field
-from typing import Any, Final, TypedDict, Unpack
+from typing import Any, Final
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -24,223 +23,98 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DeviceConfigEntry
-from .entity import WalleCubeEntity, resolve_entity_description_keys
-from .wclib import DeviceBase
+from .entity import WalleCubeEntity
 
 
-@dataclass(frozen=True, kw_only=True)
-class WalleCubeSensorEntityDescription(SensorEntityDescription):
-    state_attribute_fields: list[str] = field(default_factory=list)
-    indexed_range: range | None = None
-
-
-class _SensorKwargs(TypedDict, total=False):
-    translation_key: str
-    translation_placeholders: dict[str, str]
-    indexed_range: range
-    entity_category: EntityCategory
-    state_attribute_fields: list[str]
-
-
-def battery(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=PERCENTAGE,
-        device_class=SensorDeviceClass.BATTERY,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def power(
-    key: str = "",
+def _measurement(
+    key: str,
+    device_class: SensorDeviceClass | None,
+    unit: str,
     *,
-    enabled: bool = True,
     precision: int | None = None,
-    **kwargs: Unpack[_SensorKwargs],
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
+    **kwargs: Any,
+) -> SensorEntityDescription:
+    return SensorEntityDescription(
         key=key,
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=precision,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def voltage(
-    key: str = "",
-    *,
-    enabled: bool = True,
-    precision: int | None = None,
-    unit: UnitOfElectricPotential = UnitOfElectricPotential.VOLT,
-    **kwargs: Unpack[_SensorKwargs],
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
+        device_class=device_class,
         native_unit_of_measurement=unit,
-        device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=precision,
-        entity_registry_enabled_default=enabled,
         **kwargs,
     )
 
 
-def current(
-    key: str = "",
-    *,
-    enabled: bool = True,
-    precision: int | None = None,
-    **kwargs: Unpack[_SensorKwargs],
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=precision,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def energy(
-    key: str = "",
-    *,
-    enabled: bool = True,
-    precision: int | None = None,
-    **kwargs: Unpack[_SensorKwargs],
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        suggested_display_precision=precision,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def temperature(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def duration(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=UnitOfTime.MINUTES,
-        device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def percentage(
-    key: str = "",
-    *,
-    enabled: bool = True,
-    precision: int | None = None,
-    **kwargs: Unpack[_SensorKwargs],
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=precision,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def count(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def signal_strength(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
-) -> WalleCubeSensorEntityDescription:
-    return WalleCubeSensorEntityDescription(
-        key=key,
-        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
-        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
-    )
-
-
-def diagnostic(
-    key: str = "", enabled: bool = True, **kwargs: Unpack[_SensorKwargs]
-) -> WalleCubeSensorEntityDescription:
+def _diagnostic(key: str, *, enabled: bool = True) -> SensorEntityDescription:
     """Text value such as a version or a network name"""
-    return WalleCubeSensorEntityDescription(
+    return SensorEntityDescription(
         key=key,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=enabled,
-        **kwargs,
     )
 
 
-_SENSORS: Final[dict[str, SensorEntityDescription]] = {
-    "battery_level": battery(),
-    "battery_voltage": voltage(precision=2),
-    "cell_voltage_{n}": voltage(
-        precision=3,
-        indexed_range=range(1, 5),
-        translation_key="cell_voltage",
-        translation_placeholders={"n": "{n}"},
-    ),
-    "cell_voltage_difference": voltage(
-        precision=0, unit=UnitOfElectricPotential.MILLIVOLT
-    ),
-    "battery_current": current(precision=2),
-    "dc_input_voltage": voltage(precision=2),
-    "dc_input_current": current(precision=2),
-    "dc_output_voltage": voltage(precision=2),
-    "dc_output_current": current(precision=2),
-    "output_power": power(precision=1),
-    "temperature": temperature(),
-    "remaining_time_discharging": duration(),
-    "energy_total": energy(precision=3),
-    # estimated from the cycle count like the vendor cloud does
-    "battery_health": percentage(precision=0),
-    "battery_cycles": count(),
-    "power_board_firmware_version": diagnostic(),
-    "power_board_hardware_version": diagnostic(enabled=False),
-    "wifi_rssi": signal_strength(entity_category=EntityCategory.DIAGNOSTIC),
-    "wifi_ssid": diagnostic(),
-    "wifi_ip_address": diagnostic(),
-}
+_VOLTS = SensorDeviceClass.VOLTAGE, UnitOfElectricPotential.VOLT
+_AMPERES = SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE
 
-SENSOR_TYPES: Final[dict[str, SensorEntityDescription]] = (
-    resolve_entity_description_keys(_SENSORS)
-)
+SENSOR_TYPES: Final[dict[str, SensorEntityDescription]] = {
+    description.key: description
+    for description in (
+        _measurement("battery_level", SensorDeviceClass.BATTERY, PERCENTAGE),
+        _measurement("battery_voltage", *_VOLTS, precision=2),
+        *(
+            _measurement(
+                f"cell_voltage_{n}",
+                *_VOLTS,
+                precision=3,
+                translation_key="cell_voltage",
+                translation_placeholders={"n": str(n)},
+            )
+            for n in range(1, 5)
+        ),
+        _measurement(
+            "cell_voltage_difference",
+            SensorDeviceClass.VOLTAGE,
+            UnitOfElectricPotential.MILLIVOLT,
+            precision=0,
+        ),
+        _measurement("battery_current", *_AMPERES, precision=2),
+        _measurement("dc_input_voltage", *_VOLTS, precision=2),
+        _measurement("dc_input_current", *_AMPERES, precision=2),
+        _measurement("dc_output_voltage", *_VOLTS, precision=2),
+        _measurement("dc_output_current", *_AMPERES, precision=2),
+        _measurement(
+            "output_power", SensorDeviceClass.POWER, UnitOfPower.WATT, precision=1
+        ),
+        _measurement(
+            "temperature", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS
+        ),
+        _measurement(
+            "remaining_time_discharging", SensorDeviceClass.DURATION, UnitOfTime.MINUTES
+        ),
+        SensorEntityDescription(
+            key="energy_total",
+            device_class=SensorDeviceClass.ENERGY,
+            native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            suggested_display_precision=3,
+        ),
+        # estimated from the cycle count like the vendor cloud does
+        _measurement("battery_health", None, PERCENTAGE, precision=0),
+        SensorEntityDescription(
+            key="battery_cycles", state_class=SensorStateClass.TOTAL_INCREASING
+        ),
+        _diagnostic("power_board_firmware_version"),
+        _diagnostic("power_board_hardware_version", enabled=False),
+        _measurement(
+            "wifi_rssi",
+            SensorDeviceClass.SIGNAL_STRENGTH,
+            SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+        _diagnostic("wifi_ssid"),
+        _diagnostic("wifi_ip_address"),
+    )
+}
 
 
 async def async_setup_entry(
@@ -248,60 +122,19 @@ async def async_setup_entry(
     config_entry: DeviceConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add sensors for passed config_entry in HA"""
     device = config_entry.runtime_data
-
-    new_sensors = [
-        WalleCubeSensor(device, sensor)
-        for sensor in SENSOR_TYPES
-        if hasattr(device, sensor)
-    ]
-
-    if new_sensors:
-        async_add_entities(new_sensors)
+    async_add_entities(
+        WalleCubeSensor(device, description)
+        for description in SENSOR_TYPES.values()
+        if hasattr(device, description.key)
+    )
 
 
 class WalleCubeSensor(WalleCubeEntity, SensorEntity):
-    """Base representation of a sensor"""
+    """Measured or reported value, throttled by the update period"""
 
-    def __init__(self, device: DeviceBase, sensor: str):
-        """Initialize the sensor"""
-        super().__init__(device)
-
-        self._sensor = sensor
-        self._attr_unique_id = f"wc_{device.identifier}_{sensor}"
-        self.entity_description = SENSOR_TYPES[sensor]
-        if self.entity_description.translation_key is None:
-            self._attr_translation_key = self.entity_description.key
-
-        self._attribute_fields = (
-            self.entity_description.state_attribute_fields
-            if isinstance(self.entity_description, WalleCubeSensorEntityDescription)
-            else []
-        )
+    _throttled = True
 
     @property
-    def native_value(self):
-        """Return the value of the sensor"""
-        return getattr(self._device, self._sensor, None)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if not self._attribute_fields:
-            return {}
-
-        return {
-            field_name: getattr(self._device, field_name)
-            for field_name in self._attribute_fields
-            if hasattr(self._device, field_name)
-        }
-
-    async def async_added_to_hass(self):
-        """Run when this Entity has been added to HA"""
-        await super().async_added_to_hass()
-        self._device.register_callback(self.async_write_ha_state, self._sensor)
-
-    async def async_will_remove_from_hass(self):
-        """Entity being removed from hass"""
-        await super().async_will_remove_from_hass()
-        self._device.remove_callback(self.async_write_ha_state, self._sensor)
+    def native_value(self) -> Any:
+        return self._value

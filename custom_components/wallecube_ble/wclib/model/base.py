@@ -1,7 +1,7 @@
 import struct
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from functools import cache
-from inspect import get_annotations, getmro
+from inspect import get_annotations
 from typing import (
     Annotated,
     ClassVar,
@@ -36,7 +36,9 @@ class RawData:
     SIZE: ClassVar[int] = 0
 
     def __init_subclass__(cls) -> None:
-        # start from the parent's format so subclasses can extend a message
+        # start from the parent's format so subclasses can extend a message; fields
+        # mapped to the parent are not assigned from a subclass, see
+        # `RawDataProps.update_from_bytes`
         format_chars = list(cls._FORMAT)
         for name, annotation in get_annotations(cls).items():
             if get_origin(annotation) is not Annotated:
@@ -58,16 +60,10 @@ class RawData:
         fmt = cls._struct_format(count)
         return cls(*struct.unpack(fmt, data[: struct.calcsize(fmt)]))
 
-    @classmethod
-    @cache
-    def get_bases(cls) -> tuple[type["RawData"], ...]:
-        """Return this message type and its parent message types"""
-        bases = []
-        for parent in getmro(cls):
-            if parent is RawData:
-                break
-            bases.append(parent)
-        return tuple(bases)
+    def to_bytes(self) -> bytes:
+        """Encode the message, all fields have to be set"""
+        values = astuple(self)
+        return struct.pack(self._struct_format(len(values)), *values)
 
     @classmethod
     def _struct_format(cls, count: int) -> str:

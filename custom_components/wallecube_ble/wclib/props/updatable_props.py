@@ -11,14 +11,8 @@ class UpdatableProps:
 
     Assigning a field records its name in `updated_fields` if the value changed, so a
     device can notify only the entities affected by a received message.
-
-    Attributes
-    ----------
-    updated
-        True if any field changed after the last call to `reset_updated`
     """
 
-    updated: bool = False
     _updated_fields: set[str] | None = None
     _fields: ClassVar[list["Field[Any]"]] = []
 
@@ -30,14 +24,7 @@ class UpdatableProps:
         return self._updated_fields
 
     def reset_updated(self):
-        self.updated = False
         self.updated_fields.clear()
-
-    def get_value[T](self, field: "Field[T] | str") -> T | None:
-        return getattr(self, field.public_name if isinstance(field, Field) else field)
-
-    def set_value(self, field: "Field[Any] | str", value: Any):
-        setattr(self, field.public_name if isinstance(field, Field) else field, value)
 
     def get_controls[C: "ControlType"](self, control_type: type[C]) -> list[C]:
         """Return the controls of the given type declared on this device's fields"""
@@ -46,15 +33,6 @@ class UpdatableProps:
             for f in self._fields
             if f.control is not None and isinstance(f.control, control_type)
         ]
-
-    def __str__(self) -> str:
-        cls = f"{self.__class__.__module__}.{self.__class__.__name__}"
-        lines = [f"  {f.public_name}: {self.get_value(f)!r}" for f in self._fields]
-        return f"{cls}:\n" + "\n".join(lines)
-
-
-class Skip:
-    """Sentinel a transform can return to leave the current value unchanged"""
 
 
 class Field[T]:
@@ -87,12 +65,10 @@ class Field[T]:
         return getattr(instance, self.private_name, None)
 
     def __set__(self, instance: UpdatableProps, value: Any):
-        if (value := self._transform(value)) is Skip:
-            return
+        value = self._transform(value)
         if value == getattr(instance, self.private_name, None):
             return
         setattr(instance, self.private_name, value)
-        instance.updated = True
         instance.updated_fields.add(self.public_name)
 
     def __repr__(self):

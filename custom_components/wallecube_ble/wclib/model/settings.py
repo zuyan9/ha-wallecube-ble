@@ -1,4 +1,3 @@
-import struct
 from typing import Annotated, Self
 
 from .base import RawData
@@ -34,16 +33,6 @@ class AdapterSettings(RawData):
             power_good_voltage=int(voltage * 0.958 * 1000),
         )
 
-    def to_bytes(self) -> bytes:
-        return struct.pack(
-            "<5H",
-            self.adapter_current,
-            self.charge_current_limit,
-            self.adapter_voltage,
-            self.stop_charge_voltage,
-            self.power_good_voltage,
-        )
-
 
 class StandbySettings(RawData):
     """
@@ -56,6 +45,3 @@ class StandbySettings(RawData):
 
     time: Annotated[int, "H"]  # s
     current_threshold: Annotated[int, "H"]  # mA
-
-    def to_bytes(self) -> bytes:
-        return struct.pack("<2H", self.time, self.current_threshold)

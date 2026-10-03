@@ -608,9 +608,7 @@ class Device(DeviceBase, RawDataProps):
     def _publish_updates(self) -> None:
         # called right after assigning fields, before the next await, so updates from
         # interleaved telemetry and settings reads are not lost
-        for field_name in self.updated_fields:
-            self.update_callback(field_name)
-            self.update_state(field_name, getattr(self, field_name, None))
+        self._publish(self.updated_fields)
         self.reset_updated()
 
 

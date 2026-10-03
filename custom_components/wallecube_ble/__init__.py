@@ -17,27 +17,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from . import wclib
-from .config_flow import ConfLogOptions
 from .const import (
     CONF_ADVANCED_CONNECTION_OPTIONS,
     CONF_BLUEZ_START_NOTIFY,
-    CONF_COLLECT_PACKETS,
-    CONF_COLLECT_PACKETS_AMOUNT,
-    CONF_CONNECTION_TIMEOUT,
-    CONF_DIAGNOSTICS_OPTIONS,
     CONF_UPDATE_PERIOD,
-    DEFAULT_COLLECT_PACKETS_AMOUNT,
-    DEFAULT_CONNECTION_TIMEOUT,
     DEFAULT_UPDATE_PERIOD,
     DOMAIN,
 )
-from .wclib.connection import BleakError, Connection
-from .wclib.exceptions import (
-    ConnectionTimeout,
-    SessionKeyError,
-    UnsupportedBluetoothProtocol,
-)
-from .wclib.logging_util import LogOptions
+from .wclib.connection import BleakError
+from .wclib.exceptions import SessionKeyError, UnsupportedBluetoothProtocol
+from .wclib.logging_util import mask_identifiers
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -60,68 +49,39 @@ _REAPPEAR_CALLBACKS_KEY = f"{DOMAIN}_reappear_callbacks"
 async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bool:
     """Set up WalleCube BLE device from a config entry"""
     address = entry.data.get(CONF_ADDRESS)
-    merged_options = entry.data | entry.options
-    update_period = merged_options.get(CONF_UPDATE_PERIOD, DEFAULT_UPDATE_PERIOD)
-
     if address is None:
         return False
 
-    if not bluetooth.async_address_present(hass, address):
+    discovery_info = bluetooth.async_last_service_info(hass, address, connectable=True)
+    if discovery_info is None:
         _register_reappear_callback(hass, entry, address)
         raise ConfigEntryNotReady(translation_key="device_not_present")
 
     _cancel_reappear_callback(hass, entry)
 
     device: wclib.DeviceBase | None = getattr(entry, "runtime_data", None)
-    discovery_info = bluetooth.async_last_service_info(hass, address, connectable=True)
-
     if device is None:
-        if (
-            discovery_info is None
-            or (
-                device := wclib.NewDevice(
-                    discovery_info.device, discovery_info.advertisement
-                )
-            )
-            is None
-        ):
+        device = wclib.NewDevice(discovery_info.device, discovery_info.advertisement)
+        if device is None:
             raise ConfigEntryNotReady(translation_key="unable_to_create_device")
         entry.runtime_data = device
-    elif discovery_info is not None:
+    else:
         device.update_ble_device(discovery_info.device)
 
-    diag_options = merged_options.get(CONF_DIAGNOSTICS_OPTIONS, {})
-    advanced = merged_options.get(CONF_ADVANCED_CONNECTION_OPTIONS, {})
-    timeout = advanced.get(CONF_CONNECTION_TIMEOUT, DEFAULT_CONNECTION_TIMEOUT)
-
+    _apply_options(device, entry)
     try:
-        await (
-            device.with_update_period(update_period)
-            .with_logging_options(ConfLogOptions.from_config(merged_options))
-            .with_disabled_reconnect()
-            .with_enabled_packet_diagnostics(
-                diag_options.get(CONF_COLLECT_PACKETS, False),
-                diag_options.get(
-                    CONF_COLLECT_PACKETS_AMOUNT, DEFAULT_COLLECT_PACKETS_AMOUNT
-                ),
-            )
-            .with_connection_options(
-                Connection.Options(
-                    timeout=timeout,
-                    bluez_start_notify=advanced.get(CONF_BLUEZ_START_NOTIFY, False),
-                )
-            )
-            # unlimited: HA retries the setup with its own backoff of up to 10 min,
-            # and the UPS can stay unreachable for long, e.g. while the vendor app
-            # holds its only connection or after it shut down at the end of an outage
-            .connect(max_attempts=0)
-        )
-        state = await device.wait_until_authenticated_or_error(raise_on_error=True)
-    except (ConnectionTimeout, BleakError, TimeoutError) as e:
+        # HA retries a failed setup with its own backoff, however long the UPS stays
+        # unreachable, e.g. while the vendor app holds its only connection or after it
+        # shut down at the end of an outage
+        await device.connect()
+    except (BleakError, TimeoutError) as e:
+        # bleak-retry-connector and BlueZ name the device by its addresses, and HA logs
+        # the traceback of a cause at debug level
+        error = mask_identifiers(str(e), device.address, device.base_mac_hint)
         raise ConfigEntryNotReady(
             translation_key="could_not_connect",
-            translation_placeholders={"time": str(timeout), "error_msg": str(e)},
-        ) from e
+            translation_placeholders={"error_msg": error},
+        ) from None
     except SessionKeyError as e:
         raise ConfigEntryNotReady(translation_key="session_key_failed") from e
     except UnsupportedBluetoothProtocol as e:
@@ -136,21 +96,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
         raise ConfigEntryNotReady(
             translation_key="unknown_error", translation_placeholders={"error": str(e)}
         ) from e
-    else:
-        if not state.authenticated:
-            await device.disconnect()
-            raise ConfigEntryNotReady(
-                translation_key="failed_after_successful_connection",
-                translation_placeholders={"last_state": state},
-            )
 
-    def _on_disconnect(exc: Exception | type[Exception] | None):
+    def _on_disconnect(exc: Exception | None):
         hass.config_entries.async_schedule_reload(entry.entry_id)
 
     # registered before the platforms are set up, otherwise a disconnect meanwhile
     # is lost and the entry stays loaded on a dead link. The reload waits for this
     # setup to finish.
-    entry.async_on_unload(device.on_disconnect(_on_disconnect))
+    entry.async_on_unload(device.listeners.on_disconnect.add(_on_disconnect))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_update_listener))
@@ -163,7 +116,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> b
     _cancel_reappear_callback(hass, entry)
     device = entry.runtime_data
     await device.disconnect()
-    device.with_logging_options(LogOptions.no_options())
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
@@ -183,7 +135,7 @@ def _register_reappear_callback(
         service_info: BluetoothServiceInfoBleak,
         change: BluetoothChange,
     ) -> None:
-        _LOGGER.info("Device %s reappeared, scheduling reload", address)
+        _LOGGER.info("%s reappeared, scheduling reload", entry.title)
         _cancel_reappear_callback(hass, entry)
         hass.config_entries.async_schedule_reload(entry.entry_id)
 
@@ -193,7 +145,7 @@ def _register_reappear_callback(
         BluetoothCallbackMatcher(address=address, connectable=True),
         BluetoothScanningMode.PASSIVE,
     )
-    _LOGGER.debug("Registered BLE reappear callback for %s", address)
+    _LOGGER.debug("Registered BLE reappear callback for %s", entry.title)
 
 
 def _cancel_reappear_callback(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -203,28 +155,13 @@ def _cancel_reappear_callback(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def _update_listener(hass: HomeAssistant, entry: DeviceConfigEntry):
-    device = entry.runtime_data
-    merged_options = entry.data | entry.options
-    diag_options = merged_options.get(CONF_DIAGNOSTICS_OPTIONS, {})
-    advanced = merged_options.get(CONF_ADVANCED_CONNECTION_OPTIONS, {})
+    _apply_options(entry.runtime_data, entry)
 
-    (
-        device.with_update_period(
-            merged_options.get(CONF_UPDATE_PERIOD, DEFAULT_UPDATE_PERIOD)
-        )
-        .with_logging_options(ConfLogOptions.from_config(merged_options))
-        .with_enabled_packet_diagnostics(
-            diag_options.get(CONF_COLLECT_PACKETS, False),
-            diag_options.get(
-                CONF_COLLECT_PACKETS_AMOUNT, DEFAULT_COLLECT_PACKETS_AMOUNT
-            ),
-        )
-        .with_connection_options(
-            Connection.Options(
-                timeout=advanced.get(
-                    CONF_CONNECTION_TIMEOUT, DEFAULT_CONNECTION_TIMEOUT
-                ),
-                bluez_start_notify=advanced.get(CONF_BLUEZ_START_NOTIFY, False),
-            )
-        )
-    )
+
+def _apply_options(device: wclib.DeviceBase, entry: DeviceConfigEntry) -> None:
+    """Pass the entry's settings to the device, at setup and when they change"""
+    options = entry.data | entry.options
+    advanced = options.get(CONF_ADVANCED_CONNECTION_OPTIONS, {})
+    device.with_update_period(
+        options.get(CONF_UPDATE_PERIOD, DEFAULT_UPDATE_PERIOD)
+    ).with_bluez_start_notify(advanced.get(CONF_BLUEZ_START_NOTIFY, False))

@@ -1,6 +1,5 @@
-import dataclasses
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from bleak.exc import BleakError
 from homeassistant.core import callback
@@ -31,15 +30,20 @@ _SETTING_ERRORS = (
 
 
 class WalleCubeEntity(Entity):
+    """Entity that shows the device field named by its description's key"""
+
     _attr_has_entity_name = True
     # state is pushed from device callbacks, polling would only bypass the update
     # period throttle
     _attr_should_poll = False
+    # sensors follow the update period, the other entities are written at once
+    _throttled = False
 
-    def __init__(self, device: DeviceBase):
+    def __init__(self, device: DeviceBase, description: EntityDescription) -> None:
         self._device = device
-        self._update_callbacks: list[tuple[str, Callable[[Any], None]]] = []
-        self._initial_states: list[Callable[[], None]] = []
+        self.entity_description = description
+        self._attr_unique_id = f"wc_{device.identifier}_{description.key}"
+        self._attr_translation_key = description.translation_key or description.key
 
     @property
     def device_info(self):
@@ -65,37 +69,10 @@ class WalleCubeEntity(Entity):
             or self.entity_description.key not in self._device.data_fields
         )
 
-    class SkipWrite:
-        """Sentinel value for skipping write in update callback"""
-
-    def _register_update_callback(
-        self,
-        entity_attr: str,
-        prop_name: str | None,
-        get_state: Callable[[Any], Any] = lambda x: x,
-        default_state: Any = None,
-    ):
-        if prop_name is None or not hasattr(self._device, prop_name):
-            return
-
-        def load_current_state():
-            if (state := getattr(self._device, prop_name, None)) is not None:
-                state = get_state(state)
-                if state is not WalleCubeEntity.SkipWrite:
-                    setattr(self, entity_attr, state)
-            else:
-                setattr(self, entity_attr, default_state)
-
-        @callback
-        def state_updated(state: Any):
-            if (state := get_state(state)) is WalleCubeEntity.SkipWrite:
-                return
-            setattr(self, entity_attr, state)
-            self.async_write_ha_state()
-
-        load_current_state()
-        self._initial_states.append(load_current_state)
-        self._update_callbacks.append((prop_name, state_updated))
+    @property
+    def _value(self) -> Any:
+        """Current value of the device field"""
+        return getattr(self._device, self.entity_description.key, None)
 
     async def _change_setting[*Ts](
         self, setter: Callable[[DeviceBase, *Ts], Awaitable[None]], *args: *Ts
@@ -111,66 +88,17 @@ class WalleCubeEntity(Entity):
             ) from e
 
     async def async_added_to_hass(self) -> None:
-        for prop, state_callback in self._update_callbacks:
-            self._device.register_state_update_callback(state_callback, prop)
-        # values published between construction and subscription, e.g. by the
-        # settings read after connecting, would otherwise be missed until they change
-        for load_current_state in self._initial_states:
-            load_current_state()
         await super().async_added_to_hass()
+        self.async_on_remove(
+            self._device.subscribe(
+                self.entity_description.key, self._on_update, throttled=self._throttled
+            )
+        )
 
-    async def async_will_remove_from_hass(self) -> None:
-        for prop, state_callback in self._update_callbacks:
-            self._device.remove_state_update_callback(state_callback, prop)
-        await super().async_will_remove_from_hass()
+    @callback
+    def _on_update(self) -> None:
+        self.async_write_ha_state()
 
 
 def _version(value: int | None) -> str | None:
     return None if value is None else str(value)
-
-
-@runtime_checkable
-class IndexableDescription(Protocol):
-    """Entity description that supports indexed expansion via `{n}` in keys"""
-
-    key: str
-    indexed_range: range | None
-    translation_placeholders: Mapping[str, str] | None
-
-
-def resolve_entity_description_keys[D: EntityDescription](
-    descriptions: dict[str, D],
-) -> dict[str, D]:
-    """
-    Fill in description keys from dict keys and expand indexed descriptions
-
-    Keys containing `{n}` whose description has `indexed_range` set are expanded over
-    that range; `{n}` in translation placeholder values is replaced as well.
-    """
-    result: dict[str, D] = {}
-    for key, description in descriptions.items():
-        if not (
-            "{n}" in key
-            and isinstance(description, IndexableDescription)
-            and description.indexed_range is not None
-        ):
-            result[key] = (
-                dataclasses.replace(description, key=key)
-                if not description.key
-                else description
-            )
-            continue
-
-        for i in description.indexed_range:
-            actual_key = key.replace("{n}", str(i))
-            placeholders = description.translation_placeholders
-            if placeholders:
-                placeholders = {k: v.format(n=i) for k, v in placeholders.items()}
-            result[actual_key] = dataclasses.replace(
-                description,
-                key=actual_key,
-                indexed_range=None,
-                translation_placeholders=placeholders,
-            )
-
-    return result

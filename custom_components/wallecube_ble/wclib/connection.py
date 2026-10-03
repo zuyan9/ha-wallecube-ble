@@ -2,8 +2,7 @@ import asyncio
 import contextlib
 import logging
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from enum import StrEnum, auto
 from typing import Any
 
@@ -11,26 +10,23 @@ from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import (
-    MAX_CONNECT_ATTEMPTS,
-    BleakNotFoundError,
-    establish_connection,
-)
+from bleak_retry_connector import BleakNotFoundError, establish_connection
 
 from . import packet
 from .encryption import SessionCipher, candidate_base_macs, derive_session_key
 from .exceptions import (
-    ConnectionTimeout,
-    MaxConnectionAttemptsReached,
-    MaxReconnectAttemptsReached,
     PacketParseError,
     SessionKeyError,
     UnsupportedBluetoothProtocol,
 )
-from .listeners import ListenerGroup, ListenerRegistry
-from .logging_util import ConnectionLogger, LogOptions, mask_address, mask_local_name
+from .listeners import ListenerGroup
+from .logging_util import (
+    device_logger,
+    mask_address,
+    mask_identifiers,
+    mask_local_name,
+)
 
-MAX_RECONNECT_ATTEMPTS = 2
 MAX_ERRORS_BEFORE_RECONNECT = 5
 
 _CIPHER_BLOCK_SIZE = 16
@@ -62,9 +58,6 @@ CONFIG_CHARACTERISTIC_UUID = _uuid16(0xF0C1)
 
 
 class ConnectionState(StrEnum):
-    NOT_CONNECTED = auto()
-
-    CREATED = auto()
     ESTABLISHING_CONNECTION = auto()
     CONNECTED = auto()
     ESTABLISHING_SESSION = auto()
@@ -77,18 +70,10 @@ class ConnectionState(StrEnum):
     ERROR_BLEAK = auto()
     ERROR_UNSUPPORTED_PROTOCOL = auto()
     ERROR_AUTH_FAILED = auto()
-    ERROR_UNKNOWN = auto()
     ERROR_TOO_MANY_ERRORS = auto()
-
-    RECONNECTING = auto()
-    ERROR_MAX_RECONNECT_ATTEMPTS_REACHED = auto()
 
     DISCONNECTING = auto()
     DISCONNECTED = auto()
-
-    @property
-    def connection_error(self) -> bool:
-        return self in _CONNECTION_ERROR_STATES
 
     @property
     def is_error(self) -> bool:
@@ -98,32 +83,19 @@ class ConnectionState(StrEnum):
     def is_connected(self) -> bool:
         return self in _CONNECTED_STATES
 
-    @property
-    def is_connecting(self) -> bool:
-        return self.is_connected or self in _CONNECTING_STATES
 
-    @property
-    def authenticated(self) -> bool:
-        return self is ConnectionState.AUTHENTICATED
-
-    @property
-    def is_terminal(self) -> bool:
-        return self.is_error or self in _TERMINAL_STATES
-
-
-_CONNECTION_ERROR_STATES = frozenset(
-    {
-        ConnectionState.ERROR_TIMEOUT,
-        ConnectionState.ERROR_NOT_FOUND,
-        ConnectionState.ERROR_BLEAK,
-    }
+# the state a failed connect ends in, by the exception that made it fail; the most
+# specific first, BleakNotFoundError is a BleakError
+_FAILURE_STATES: tuple[tuple[type[Exception], ConnectionState], ...] = (
+    (SessionKeyError, ConnectionState.ERROR_AUTH_FAILED),
+    (UnsupportedBluetoothProtocol, ConnectionState.ERROR_UNSUPPORTED_PROTOCOL),
+    (TimeoutError, ConnectionState.ERROR_TIMEOUT),
+    (BleakNotFoundError, ConnectionState.ERROR_NOT_FOUND),
+    (BleakError, ConnectionState.ERROR_BLEAK),
 )
-_ERROR_STATES = _CONNECTION_ERROR_STATES | {
-    ConnectionState.ERROR_UNSUPPORTED_PROTOCOL,
-    ConnectionState.ERROR_AUTH_FAILED,
-    ConnectionState.ERROR_UNKNOWN,
-    ConnectionState.ERROR_TOO_MANY_ERRORS,
-    ConnectionState.ERROR_MAX_RECONNECT_ATTEMPTS_REACHED,
+_FAILURE_TYPES = tuple(kind for kind, _ in _FAILURE_STATES)
+_ERROR_STATES = frozenset(state for _, state in _FAILURE_STATES) | {
+    ConnectionState.ERROR_TOO_MANY_ERRORS
 }
 _CONNECTED_STATES = frozenset(
     {
@@ -133,19 +105,10 @@ _CONNECTED_STATES = frozenset(
         ConnectionState.SUBSCRIBING,
     }
 )
-_CONNECTING_STATES = frozenset(
-    {ConnectionState.ESTABLISHING_CONNECTION, ConnectionState.RECONNECTING}
-)
-_TERMINAL_STATES = frozenset(
-    {
-        ConnectionState.AUTHENTICATED,
-        ConnectionState.DISCONNECTED,
-        ConnectionState.NOT_CONNECTED,
-    }
-)
 
 
-type DisconnectListener = Callable[[Exception | type[Exception] | None], None]
+# called on disconnect with the exception that caused it, if any
+type DisconnectListener = Callable[[Exception | None], None]
 type ConnectionStateListener = Callable[[ConnectionState], None]
 # called with the characteristic or configuration message, see `config_source`, and the
 # decrypted payload without session header; encrypted frames are never passed on
@@ -155,24 +118,18 @@ type DataParser = Callable[[bytes], Awaitable[bool]]
 type ConfigParser = Callable[[packet.ConfigMessage], Awaitable[bool]]
 
 
-class _ConnectionListeners(ListenerRegistry):
-    on_disconnect: ListenerGroup[DisconnectListener]
-    on_connection_state_change: ListenerGroup[ConnectionStateListener]
-    on_data_received: ListenerGroup[DataReceivedListener]
-    on_data_send: ListenerGroup[DataSendListener]
+class Listeners:
+    """Listeners of a device, shared by its successive connections"""
+
+    def __init__(self) -> None:
+        self.on_disconnect: ListenerGroup[DisconnectListener] = ListenerGroup()
+        self.on_state_change: ListenerGroup[ConnectionStateListener] = ListenerGroup()
+        self.on_data_received: ListenerGroup[DataReceivedListener] = ListenerGroup()
+        self.on_data_send: ListenerGroup[DataSendListener] = ListenerGroup()
 
 
 class Connection:
     """Manages the BLE client and the session, and forwards telemetry for parsing"""
-
-    @dataclass
-    class Options:
-        """Connection options configurable from HA"""
-
-        timeout: int = 20
-        bluez_start_notify: bool = False
-
-    _listeners = _ConnectionListeners.create()
 
     def __init__(
         self,
@@ -180,42 +137,29 @@ class Connection:
         data_parse: DataParser,
         base_mac_hint: bytes | None = None,
         config_parse: ConfigParser | None = None,
+        listeners: Listeners | None = None,
+        bluez_start_notify: bool = False,
     ) -> None:
         self._ble_dev = ble_dev
         self._address = ble_dev.address
         self._data_parse = data_parse
         self._config_parse = config_parse
         self._base_mac_hint = base_mac_hint
-        self._options = Connection.Options()
-        self._logger = ConnectionLogger(self)
+        self.listeners = listeners if listeners is not None else Listeners()
+        # subscribe through BlueZ's StartNotify instead of AcquireNotify
+        self.bluez_start_notify = bluez_start_notify
+        self._logger = device_logger(__name__, self._address)
 
         self._client: BleakClient | None = None
         self._cipher: SessionCipher | None = None
-        self._base_mac_offset: int | None = None
         self._base_mac_from_name = False
         self._info: bytes = b""
         self._characteristics: frozenset[str] | None = None
         self._warned_truncated_config = False
 
         self._errors = 0
-        self._reconnect = True
-        self._retry_on_disconnect = False
-        self._retry_on_disconnect_delay = 10
-        self._reconnect_task: asyncio.Task | None = None
-        self._connection_attempt = 0
-        self._reconnect_attempt = 0
         self._failure_logged = False
-        self._tasks: set[asyncio.Task] = set()
-
-        self._state_changed = asyncio.Event()
-        self._state_exception: Exception | type[Exception] | None = None
-        self._last_exception: Exception | type[Exception] | None = None
-        self._connection_state = ConnectionState.CREATED
-        self._last_state = ConnectionState.CREATED
-
-    @property
-    def address(self) -> str:
-        return self._address
+        self._connection_state = ConnectionState.DISCONNECTED
 
     @property
     def is_connected(self) -> bool:
@@ -228,15 +172,6 @@ class Connection:
     @property
     def session_established(self) -> bool:
         return self._cipher is not None
-
-    @property
-    def base_mac_offset(self) -> int | None:
-        """Offset between advertised address and factory MAC that keyed the session"""
-        return self._base_mac_offset
-
-    @property
-    def base_mac_hint(self) -> bytes | None:
-        return self._base_mac_hint
 
     @property
     def base_mac_from_name(self) -> bool:
@@ -253,62 +188,20 @@ class Connection:
         """UUIDs of the characteristics the device exposed, None before connecting"""
         return self._characteristics
 
-    def on_disconnect(self, listener: DisconnectListener):
-        """
-        Add disconnect listener
-
-        Parameters
-        ----------
-        listener
-            Called on disconnect with the exception that caused it, if any
-
-        Returns
-        -------
-        Function that removes the listener
-        """
-        return self._listeners.on_disconnect.add(listener)
-
-    def on_state_change(self, listener: ConnectionStateListener):
-        return self._listeners.on_connection_state_change.add(listener)
-
-    def on_data_received(self, listener: DataReceivedListener):
-        return self._listeners.on_data_received.add(listener)
-
-    def on_data_send(self, listener: DataSendListener):
-        return self._listeners.on_data_send.add(listener)
-
     def update_ble_device(self, ble_dev: BLEDevice):
         self._ble_dev = ble_dev
 
-    def with_logging_options(self, options: LogOptions):
-        self._logger.set_options(options)
-        return self
+    async def connect(self) -> None:
+        """
+        Connect, derive the session key and subscribe to telemetry
 
-    def with_disabled_reconnect(self, is_disabled: bool = True):
-        self._reconnect = not is_disabled
-        return self
-
-    def with_options(self, options: "Connection.Options"):
-        self._options = options
-        return self
-
-    async def connect(self, max_attempts: int | None = None) -> None:
-        """Connect, derive the session key and subscribe to telemetry"""
+        A failure is raised after it was logged and passed to the listeners.
+        """
         if self._connection_state.is_connected or self._connection_state in (
             ConnectionState.ESTABLISHING_CONNECTION,
             ConnectionState.AUTHENTICATED,
         ):
             return
-
-        max_attempts = MAX_CONNECT_ATTEMPTS if max_attempts is None else max_attempts
-        self._connection_attempt += 1
-        if max_attempts != 0 and self._connection_attempt > max_attempts:
-            self._connection_attempt = 0
-            err = MaxConnectionAttemptsReached(
-                last_error=self._last_exception, attempts=max_attempts
-            )
-            self._set_state(ConnectionState.ERROR_MAX_RECONNECT_ATTEMPTS_REACHED, err)
-            raise err
 
         self._set_state(ConnectionState.ESTABLISHING_CONNECTION)
         self._logger.info("Connecting to device")
@@ -320,57 +213,21 @@ class Connection:
                 mask_local_name(self._ble_dev.name) or mask_address(self._address),
                 disconnected_callback=self.disconnected,
                 ble_device_callback=lambda: self._ble_dev,
-                # 0 means unlimited at connection level, but bleak needs a real count
-                max_attempts=max_attempts or MAX_CONNECT_ATTEMPTS,
-                timeout=self._options.timeout,
             )
-        except TimeoutError as e:
-            await self._fail(ConnectionState.ERROR_TIMEOUT, ConnectionTimeout(str(e)))
-            return
-        except BleakNotFoundError as e:
-            await self._fail(ConnectionState.ERROR_NOT_FOUND, e)
-            return
-        except BleakError as e:
-            await self._fail(ConnectionState.ERROR_BLEAK, e)
-            return
-
-        self._set_state(ConnectionState.CONNECTED)
-        self._logger.info("Connected, establishing session")
-        self._errors = 0
-        # kept after disconnecting: the set only changes with a firmware update
-        self._characteristics = frozenset(
-            c.uuid for c in self._client.services.characteristics.values()
-        )
-
-        try:
+            self._set_state(ConnectionState.CONNECTED)
+            self._logger.info("Connected, establishing session")
+            self._errors = 0
+            # kept after disconnecting: the set only changes with a firmware update
+            self._characteristics = frozenset(
+                c.uuid for c in self._client.services.characteristics.values()
+            )
             await self._establish_session()
             await self._subscribe()
-        except SessionKeyError as e:
-            await self._fail(ConnectionState.ERROR_AUTH_FAILED, e)
-            return
-        except UnsupportedBluetoothProtocol as e:
-            await self._fail(ConnectionState.ERROR_UNSUPPORTED_PROTOCOL, e)
-            return
-        except TimeoutError as e:
-            await self._fail(ConnectionState.ERROR_TIMEOUT, ConnectionTimeout(str(e)))
-            return
-        except BleakError as e:
-            await self._fail(ConnectionState.ERROR_BLEAK, e)
-            return
+        except _FAILURE_TYPES as e:
+            await self._fail(e)
+            raise
 
-        # the link can drop while subscribing without failing the subscription, e.g.
-        # during the optional one on the configuration channel
-        if not self.is_connected:
-            await self._fail(
-                ConnectionState.ERROR_BLEAK,
-                BleakError("Disconnected while establishing the session"),
-            )
-            return
-
-        self._connection_attempt = 0
-        self._reconnect_attempt = 0
         self._failure_logged = False
-        self._retry_on_disconnect = self._reconnect
         self._set_state(ConnectionState.AUTHENTICATED)
         self._logger.info("Session established, receiving telemetry")
 
@@ -391,53 +248,11 @@ class Connection:
             return
 
         self._logger.warning("Disconnected from device")
-        if not self._retry_on_disconnect:
-            self._set_state(ConnectionState.DISCONNECTED)
-            self._notify_disconnect()
-            return
-
-        if self._reconnect_task is None:
-            self._reconnect_task = self._add_task(self.reconnect())
-            self._reconnect_task.add_done_callback(self._on_reconnect_done)
-
-    async def reconnect(self) -> None:
-        if self._reconnect_attempt == 0:
-            self._retry_on_disconnect_delay = 10
-
-        self._reconnect_attempt += 1
-        if self._reconnect_attempt > MAX_RECONNECT_ATTEMPTS:
-            self._logger.error(
-                "Could not reconnect after %d attempts", MAX_RECONNECT_ATTEMPTS
-            )
-            self._reconnect_attempt = 0
-            self._set_state(
-                ConnectionState.ERROR_MAX_RECONNECT_ATTEMPTS_REACHED,
-                MaxReconnectAttemptsReached(
-                    last_error=self._last_exception, attempts=MAX_RECONNECT_ATTEMPTS
-                ),
-            )
-            return
-
-        self._logger.warning(
-            "Reconnecting in %d seconds, attempt %d/%d",
-            self._retry_on_disconnect_delay,
-            self._reconnect_attempt,
-            MAX_RECONNECT_ATTEMPTS,
-        )
-        await asyncio.sleep(self._retry_on_disconnect_delay)
-        if not self._retry_on_disconnect:
-            return
-
-        self._retry_on_disconnect_delay += 10
-        self._set_state(ConnectionState.RECONNECTING)
-        await self.connect()
+        self._set_state(ConnectionState.DISCONNECTED)
+        self.listeners.on_disconnect(None)
 
     async def disconnect(self) -> None:
         self._logger.info("Disconnecting from device")
-        self._retry_on_disconnect = False
-        self._reconnect_attempt = 0
-        self._cancel_tasks()
-
         client, self._client = self._client, None
         if client is not None and client.is_connected:
             self._set_state(ConnectionState.DISCONNECTING)
@@ -447,49 +262,19 @@ class Connection:
         if self._connection_state is not ConnectionState.DISCONNECTED:
             self._set_state(ConnectionState.DISCONNECTED)
 
-    async def wait_until_authenticated_or_error(
-        self, raise_on_error: bool = False, return_exc: bool = False
-    ):
-        """Wait until the session is established or the connection failed"""
-        while not self._connection_state.is_terminal:
-            await self._state_changed.wait()
-
-        state, exc = self._connection_state, self._state_exception
-        if state is ConnectionState.DISCONNECTED:
-            state = self._last_state
-
-        if exc is not None and raise_on_error:
-            if isinstance(exc, MaxReconnectAttemptsReached) and exc.last_error:
-                raise exc.last_error
-            raise exc
-
-        return (state, exc) if return_exc else state
-
-    async def observe_connection(self):
-        while True:
-            yield self._connection_state
-            await self._state_changed.wait()
-
     async def read_value(self, characteristic: str) -> bytes:
         """Read an encrypted characteristic and return its decrypted payload"""
         client, cipher = self._require_session()
         data = bytes(await client.read_gatt_char(self._characteristic(characteristic)))
-        plaintext = cipher.decrypt(data)
-        self._logger.log_filtered(
-            LogOptions.DECRYPTED_PAYLOADS, "Read %s: %r", characteristic, plaintext
-        )
-        payload = packet.decode_response(plaintext)
-        self._listeners.on_data_received(_source(characteristic), payload)
+        payload = packet.decode_response(cipher.decrypt(data))
+        self.listeners.on_data_received(_source(characteristic), payload)
         return payload
 
     async def send_command(self, characteristic: str, payload: bytes = b"") -> None:
         """Encrypt a command frame and write it to a UPS characteristic"""
         client, cipher = self._require_session()
         frame = cipher.encrypt(packet.encode_command(cipher.token, payload))
-        self._logger.log_filtered(
-            LogOptions.DECRYPTED_PAYLOADS, "Write %s: %r", characteristic, payload
-        )
-        self._listeners.on_data_send(_source(characteristic), payload)
+        self.listeners.on_data_send(_source(characteristic), payload)
         await client.write_gatt_char(
             self._characteristic(characteristic), frame, response=True
         )
@@ -515,7 +300,7 @@ class Connection:
         def on_result(_: BleakGATTCharacteristic, data: bytearray) -> None:
             # the result is not encrypted
             frame = bytes(data)
-            self._listeners.on_data_received(f"{_source(characteristic)} result", frame)
+            self.listeners.on_data_received(f"{_source(characteristic)} result", frame)
             if not result.done():
                 result.set_result(frame)
 
@@ -528,9 +313,6 @@ class Connection:
                 with contextlib.suppress(EOFError, BleakError):
                     await client.stop_notify(target)
 
-        self._logger.log_filtered(
-            LogOptions.DECRYPTED_PAYLOADS, "Result %s: %r", characteristic, frame
-        )
         return packet.decode_command_result(frame)
 
     async def send_config(self, message_type: int, payload: bytes = b"") -> None:
@@ -539,13 +321,7 @@ class Connection:
         frame = cipher.encrypt(
             packet.encode_config_message(cipher.token, message_type, payload)
         )
-        self._logger.log_filtered(
-            LogOptions.DECRYPTED_PAYLOADS,
-            "Write config message 0x%02x: %r",
-            message_type,
-            payload,
-        )
-        self._listeners.on_data_send(config_source(message_type), payload)
+        self.listeners.on_data_send(config_source(message_type), payload)
         await client.write_gatt_char(
             self._characteristic(CONFIG_CHARACTERISTIC_UUID), frame, response=True
         )
@@ -554,7 +330,6 @@ class Connection:
         tb = "".join(traceback.format_tb(exception.__traceback__))
         self._logger.error("Captured exception: %s:\n%s", exception, tb)
         self._errors += 1
-        self._last_exception = exception
         if self._errors <= MAX_ERRORS_BEFORE_RECONNECT:
             return
 
@@ -564,11 +339,6 @@ class Connection:
             self._logger.warning("Disconnecting after too many errors")
             with contextlib.suppress(EOFError, BleakError):
                 await self._client.disconnect()
-
-    def set_state(
-        self, state: ConnectionState, exc: Exception | type[Exception] | None = None
-    ) -> None:
-        self._set_state(state, exc)
 
     async def _establish_session(self) -> None:
         self._set_state(ConnectionState.ESTABLISHING_SESSION)
@@ -592,18 +362,16 @@ class Connection:
 
             if _is_valid_info_frame(plaintext):
                 self._cipher = cipher
-                self._base_mac_offset = int.from_bytes(base_mac) - address
                 self._base_mac_from_name = base_mac == self._base_mac_hint
                 self._info = packet.decode_response(plaintext)
-                self._listeners.on_data_received(
+                self.listeners.on_data_received(
                     _source(INFO_CHARACTERISTIC_UUID), self._info
                 )
                 self._set_state(ConnectionState.SESSION_ESTABLISHED)
-                self._logger.log_filtered(
-                    LogOptions.CONNECTION_DEBUG,
+                self._logger.debug(
                     "Session key matched (from advertised name: %s, MAC offset: %d)",
                     self._base_mac_from_name,
-                    self._base_mac_offset,
+                    int.from_bytes(base_mac) - address,
                 )
                 return
 
@@ -616,32 +384,40 @@ class Connection:
         self._set_state(ConnectionState.SUBSCRIBING)
         assert self._client is not None
 
-        kwargs = self._notify_kwargs()
         await self._client.start_notify(
             self._characteristic(TELEMETRY_CHARACTERISTIC_UUID),
             self._on_telemetry,
-            **kwargs,
+            **self._notify_kwargs(),
         )
+        await self._subscribe_config()
 
+        # the link can drop while subscribing without failing the subscription, e.g.
+        # during the optional one on the configuration channel
+        if not self.is_connected:
+            raise BleakError("Disconnected while establishing the session")
+
+    async def _subscribe_config(self) -> None:
         # answers to configuration requests arrive as notifications; telemetry works
         # without them, so a missing or failing subscription only disables the
-        # settings that use the configuration channel
-        if self._config_parse is None:
+        # settings that use the configuration channel. A link that dropped meanwhile
+        # fails the connection in `_subscribe`.
+        if self._config_parse is None or self._client is None:
             return
         config = self._client.services.get_characteristic(CONFIG_CHARACTERISTIC_UUID)
         if config is None:
             self._logger.warning("Device has no configuration characteristic")
             return
         try:
-            await self._client.start_notify(config, self._on_config, **kwargs)
+            await self._client.start_notify(
+                config, self._on_config, **self._notify_kwargs()
+            )
         except BleakError as e:
             self._logger.warning("Could not subscribe to configuration messages: %s", e)
 
     async def _on_telemetry(self, _: BleakGATTCharacteristic, data: bytearray) -> None:
         # telemetry is not encrypted
         frame = bytes(data)
-        self._listeners.on_data_received(_source(TELEMETRY_CHARACTERISTIC_UUID), frame)
-        self._logger.log_filtered(LogOptions.PACKETS, "Telemetry frame: %r", frame)
+        self.listeners.on_data_received(_source(TELEMETRY_CHARACTERISTIC_UUID), frame)
 
         try:
             processed = await self._data_parse(frame)
@@ -651,9 +427,7 @@ class Connection:
 
         self._errors = 0
         if not processed:
-            self._logger.log_filtered(
-                LogOptions.CONNECTION_DEBUG, "Unprocessed frame: %r", frame
-            )
+            self._logger.debug("Unprocessed frame: %s", frame.hex())
 
     async def _on_config(self, _: BleakGATTCharacteristic, data: bytearray) -> None:
         frame = bytes(data)
@@ -663,7 +437,7 @@ class Connection:
         # a notification longer than the ATT MTU allows arrives cut off and cannot be
         # decrypted, e.g. the Wi-Fi status on a link that kept the default MTU
         if len(frame) % _CIPHER_BLOCK_SIZE:
-            self._listeners.on_data_received(f"F0C1 truncated to {len(frame)}", b"")
+            self.listeners.on_data_received(f"F0C1 truncated to {len(frame)}", b"")
             if not self._warned_truncated_config:
                 self._warned_truncated_config = True
                 self._logger.warning(
@@ -677,23 +451,16 @@ class Connection:
             plaintext = self._cipher.decrypt(frame)
             message = packet.ConfigMessage.from_bytes(plaintext)
         except PacketParseError as e:
-            self._listeners.on_data_received("F0C1 undecodable", b"")
+            self.listeners.on_data_received("F0C1 undecodable", b"")
             self._logger.warning("Could not decode configuration message: %s", e)
             return
 
         if message.token != self._cipher.token:
-            self._listeners.on_data_received("F0C1 foreign token", b"")
+            self.listeners.on_data_received("F0C1 foreign token", b"")
             self._logger.warning("Ignoring configuration message with foreign token")
             return
 
-        # the token is left out, it would let anyone test guessed MAC addresses
-        self._logger.log_filtered(
-            LogOptions.DECRYPTED_PAYLOADS,
-            "Config message 0x%02x: %r",
-            message.message_type,
-            message.payload,
-        )
-        self._listeners.on_data_received(
+        self.listeners.on_data_received(
             config_source(message.message_type), message.payload
         )
 
@@ -703,7 +470,7 @@ class Connection:
             await self.add_error(e)
 
     def _notify_kwargs(self) -> dict[str, Any]:
-        if self._options.bluez_start_notify:
+        if self.bluez_start_notify:
             return {"bluez": {"use_start_notify": True}}
         return {}
 
@@ -724,52 +491,26 @@ class Connection:
             raise SessionKeyError("Session is not established")
         return self._client, self._cipher
 
-    async def _fail(self, state: ConnectionState, exc: Exception) -> None:
-        # callers retry a failed connect, with max_attempts=0 indefinitely, so only
-        # the first failure in a row is worth a warning
+    async def _fail(self, exc: Exception) -> None:
+        # HA retries a failed connect indefinitely, so only the first failure in a row
+        # is worth a warning
         level = logging.DEBUG if self._failure_logged else logging.WARNING
         self._failure_logged = True
-        self._logger.log(level, "Connection failed: %s", exc)
+        # bleak-retry-connector and BlueZ name the device by its addresses
+        error = mask_identifiers(str(exc), self._address, self._base_mac_hint)
+        self._logger.log(level, "Connection failed: %s", error)
+        state = next(state for kind, state in _FAILURE_STATES if isinstance(exc, kind))
         self._set_state(state, exc)
         client, self._client = self._client, None
         if client is not None and client.is_connected:
             with contextlib.suppress(EOFError, BleakError):
                 await client.disconnect()
 
-    def _set_state(
-        self, state: ConnectionState, exc: Exception | type[Exception] | None = None
-    ) -> None:
-        self._state_exception = exc
-        if exc is not None:
-            self._last_exception = exc
-
-        self._last_state = self._connection_state
+    def _set_state(self, state: ConnectionState, exc: Exception | None = None) -> None:
         self._connection_state = state
-        self._state_changed.set()
-        self._state_changed.clear()
-        self._listeners.on_connection_state_change(state)
-
+        self.listeners.on_state_change(state)
         if state.is_error:
-            self._notify_disconnect(exc)
-
-    def _notify_disconnect(self, exc: Exception | type[Exception] | None = None):
-        self._listeners.on_disconnect(exc if exc is not None else self._last_exception)
-
-    def _on_reconnect_done(self, task: asyncio.Task[None]) -> None:
-        self._reconnect_task = None
-        if not task.cancelled() and (exc := task.exception()) is not None:
-            self._logger.error("Reconnect failed: %s", exc)
-
-    def _add_task(self, coro: Coroutine) -> asyncio.Task:
-        task = asyncio.get_running_loop().create_task(coro)
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return task
-
-    def _cancel_tasks(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        self._tasks.clear()
+            self.listeners.on_disconnect(exc)
 
 
 def _is_valid_info_frame(plaintext: bytes) -> bool:

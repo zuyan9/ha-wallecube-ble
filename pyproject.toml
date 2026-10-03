@@ -217,9 +217,6 @@ expand_tables = [ "tool.ruff" ]
 [tool.pytest]
 ini_options.asyncio_mode = "auto"
 ini_options.asyncio_default_fixture_loop_scope = "module"
-ini_options.filterwarnings = [
-  "ignore:Inheritance class HomeAssistantApplication from web.Application is discouraged:DeprecationWarning",
-]
 
 [tool.rumdl]
 # MD013/line-length

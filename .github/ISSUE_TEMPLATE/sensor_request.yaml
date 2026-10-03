@@ -25,5 +25,5 @@ body:
     attributes:
       label: Diagnostics
       description: |
-        Enable packet collection in the integration options, reproduce the situation (e.g.
-        unplug the adapter to run on battery), then download and attach diagnostics.
+        Reproduce the situation (e.g. unplug the adapter to run on battery), then download
+        diagnostics from the device page right away and attach them.

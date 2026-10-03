@@ -2,41 +2,21 @@ import abc
 import asyncio
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, ClassVar
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from .connection import (
-    Connection,
-    ConnectionState,
-    ConnectionStateListener,
-    DataReceivedListener,
-    DataSendListener,
-    DisconnectListener,
-)
+from .connection import Connection, ConnectionState, Listeners
 from .encryption import base_mac_from_local_name
-from .listeners import ListenerGroup, ListenerRegistry
-from .logging_util import (
-    ConnectionLog,
-    DeviceDiagnosticsCollector,
-    DeviceLogger,
-    LogOptions,
-)
+from .listeners import ListenerGroup
+from .logging_util import DeviceDiagnosticsCollector, device_logger
 from .packet import ConfigMessage
-from .props.updatable_props import Field
 
 # first messages after connecting are passed through immediately even when an update
 # period is set, otherwise entities would stay unknown until the first period ends
 _UNTHROTTLED_SECONDS = 5
-
-
-class _Listeners(ListenerRegistry):
-    on_disconnect: ListenerGroup[DisconnectListener]
-    on_connection_state_change: ListenerGroup[ConnectionStateListener]
-    on_data_received: ListenerGroup[DataReceivedListener]
-    on_data_send: ListenerGroup[DataSendListener]
 
 
 class DeviceBase(abc.ABC):
@@ -49,8 +29,6 @@ class DeviceBase(abc.ABC):
     # see `data_current`, None disables the check
     DATA_TIMEOUT: ClassVar[float | None] = None
 
-    _listeners = _Listeners.create()
-
     @classmethod
     @abc.abstractmethod
     def check(cls, adv_data: AdvertisementData) -> bool:
@@ -61,33 +39,34 @@ class DeviceBase(abc.ABC):
         self._address = ble_dev.address
         # the device advertises no serial number, the BLE address is its stable id
         self._identifier = self._address.replace(":", "").upper()
-        self._name: str | None = None
         self._local_name = adv_data.local_name
         self._base_mac_hint = base_mac_from_local_name(adv_data.local_name)
 
-        self._logger = DeviceLogger(self)
+        self._logger = device_logger(type(self).__module__, self._address)
         self._logger.debug("Creating new device: %s", self.device)
 
         self._conn: Connection | None = None
-        self._connection_event = asyncio.Event()
-        self._callbacks: set[Callable[[], None]] = set()
-        self._callbacks_map: dict[str, set[Callable[[], None]]] = defaultdict(set)
-        self._state_update_callbacks: dict[str, set[Callable[[Any], None]]] = (
-            defaultdict(set)
+        self._field_listeners: dict[str, ListenerGroup[Callable[[], None]]] = (
+            defaultdict(ListenerGroup)
+        )
+        self._throttled_listeners: dict[str, ListenerGroup[Callable[[], None]]] = (
+            defaultdict(ListenerGroup)
         )
         self._update_period = 0
         self._last_updated = 0.0
         self._props_to_update: set[str] = set()
         self._wait_until_throttle: float | None = 0
 
-        self._reconnect_disabled = False
         self._refresh_task: asyncio.Task | None = None
         self._poll_task: asyncio.Task | None = None
         self._data_task: asyncio.Task | None = None
         self._last_data = 0.0
         self._data_current = True
-        self._options = Connection.Options()
-        self._connection_log = ConnectionLog()
+        self._bluez_start_notify = False
+
+        # kept across connections, which are created anew after every disconnect
+        self.listeners = Listeners()
+        self.listeners.on_state_change.add(self._on_connection_state)
         self._diagnostics = DeviceDiagnosticsCollector(self)
 
     @property
@@ -105,8 +84,6 @@ class DeviceBase(abc.ABC):
 
     @property
     def name(self) -> str:
-        if self._name is not None:
-            return self._name
         # built on access, the prefix can name the model once the device reported it
         return self.NAME_PREFIX + self._identifier[-4:]
 
@@ -121,10 +98,6 @@ class DeviceBase(abc.ABC):
     @property
     def connection_state(self) -> ConnectionState | None:
         return None if self._conn is None else self._conn.state
-
-    @property
-    def session_established(self) -> bool:
-        return self._conn is not None and self._conn.session_established
 
     @property
     def base_mac_hint(self) -> bytes | None:
@@ -170,16 +143,6 @@ class DeviceBase(abc.ABC):
     def diagnostics(self) -> DeviceDiagnosticsCollector:
         return self._diagnostics
 
-    @property
-    def connection_log(self) -> ConnectionLog:
-        return self._connection_log
-
-    def set_connection_state(
-        self, state: ConnectionState, exc: Exception | type[Exception] | None = None
-    ) -> None:
-        if self._conn is not None:
-            self._conn.set_state(state, exc)
-
     def update_ble_device(self, ble_dev: BLEDevice):
         self._ble_dev = ble_dev
         if self._conn is not None:
@@ -189,33 +152,11 @@ class DeviceBase(abc.ABC):
         self._update_period = period
         return self
 
-    def with_logging_options(self, options: LogOptions):
-        self._logger.set_options(options)
+    def with_bluez_start_notify(self, enabled: bool = True):
+        """Subscribe through BlueZ's StartNotify instead of AcquireNotify"""
+        self._bluez_start_notify = enabled
         if self._conn is not None:
-            self._conn.with_logging_options(options)
-        return self
-
-    def with_disabled_reconnect(self, is_disabled: bool = True):
-        self._reconnect_disabled = is_disabled
-        if self._conn is not None:
-            self._conn.with_disabled_reconnect(is_disabled)
-        return self
-
-    def with_connection_options(self, options: Connection.Options):
-        self._options = options
-        if self._conn is not None:
-            self._conn.with_options(options)
-        return self
-
-    def with_enabled_packet_diagnostics(
-        self, enabled: bool = True, buffer_size: int = 100
-    ):
-        self._diagnostics.enabled(enabled)
-        self._diagnostics.with_buffer_size(buffer_size)
-        return self
-
-    def with_name(self, name: str):
-        self._name = name
+            self._conn.bluez_start_notify = enabled
         return self
 
     async def data_parse(self, frame: bytes) -> bool:
@@ -246,30 +187,20 @@ class DeviceBase(abc.ABC):
     async def poll(self) -> None:
         """Request values the device does not push, called every `POLL_INTERVAL`"""
 
-    async def connect(self, max_attempts: int | None = None) -> None:
+    async def connect(self) -> None:
+        """Connect and establish the session, raising what made it fail"""
         if self._conn is None:
-            self._conn = (
-                Connection(
-                    ble_dev=self._ble_dev,
-                    data_parse=self._on_data,
-                    base_mac_hint=self._base_mac_hint,
-                    config_parse=self.config_parse,
-                )
-                .with_logging_options(self._logger.options)
-                .with_disabled_reconnect(self._reconnect_disabled)
-                .with_options(self._options)
+            self._conn = Connection(
+                ble_dev=self._ble_dev,
+                data_parse=self._on_data,
+                base_mac_hint=self._base_mac_hint,
+                config_parse=self.config_parse,
+                listeners=self.listeners,
+                bluez_start_notify=self._bluez_start_notify,
             )
-            self._connection_event.set()
             self._logger.info("Connecting to %s", self.device)
 
-            self._conn.on_disconnect(self._listeners.on_disconnect)
-            self._conn.on_state_change(self._listeners.on_connection_state_change)
-            self._conn.on_state_change(self._connection_log.append)
-            self._conn.on_data_received(self._listeners.on_data_received)
-            self._conn.on_data_send(self._listeners.on_data_send)
-            self._conn.on_state_change(self._on_connection_state)
-
-        await self._conn.connect(max_attempts=max_attempts)
+        await self._conn.connect()
 
     async def disconnect(self) -> None:
         if self._conn is None:
@@ -278,27 +209,7 @@ class DeviceBase(abc.ABC):
 
         self._cancel_session_tasks()
         await self._conn.disconnect()
-        self._connection_event.clear()
         self._conn = None
-
-    async def wait_until_authenticated_or_error(
-        self, raise_on_error: bool = False, return_exc: bool = False
-    ):
-        if self._conn is None:
-            state = ConnectionState.NOT_CONNECTED
-            return (state, None) if return_exc else state
-
-        return await self._conn.wait_until_authenticated_or_error(
-            raise_on_error=raise_on_error, return_exc=return_exc
-        )
-
-    async def observe_connection(self):
-        while self._conn is None:
-            yield ConnectionState.NOT_CONNECTED
-            await self._connection_event.wait()
-
-        async for state in self._conn.observe_connection():
-            yield state
 
     async def read_value(self, characteristic: str) -> bytes:
         if self._conn is None:
@@ -331,8 +242,8 @@ class DeviceBase(abc.ABC):
         # entities are created
         if self._conn is not None:
             self.info_parse(self._conn.info)
-        # a reconnect can authenticate again while the previous refresh still waits
-        # on the dropped link
+        # the connection authenticates again when it is reused after its link dropped,
+        # while the tasks of the previous session may still run
         self._cancel_session_tasks()
         loop = asyncio.get_running_loop()
         self._refresh_task = loop.create_task(self._refresh_settings())
@@ -382,10 +293,7 @@ class DeviceBase(abc.ABC):
     def _write_data_fields(self) -> None:
         # their availability changed, so every value is published, also unchanged
         # ones, and right away instead of after the update period
-        for name in self.data_fields:
-            for callback in self._callbacks_map.get(name, ()):
-                callback()
-            self.update_state(name, getattr(self, name, None))
+        self._publish(self.data_fields, throttle=False)
 
     async def _refresh_settings(self) -> None:
         try:
@@ -405,53 +313,41 @@ class DeviceBase(abc.ABC):
             except Exception as e:  # noqa: BLE001
                 self._logger.debug("Polling failed: %s", e)
 
-    def on_disconnect(self, listener: DisconnectListener):
+    def subscribe(
+        self, name: str, listener: Callable[[], None], *, throttled: bool = False
+    ) -> Callable[[], None]:
         """
-        Add disconnect listener
+        Call `listener` whenever the field `name` changed
+
+        A field of `data_fields` also calls it, right away and with an unchanged value,
+        when it goes stale and when it becomes current again, see `data_current`.
 
         Parameters
         ----------
-        listener
-            Called on disconnect with the exception that caused it, if any
+        throttled
+            Call it at most once per update period, see `with_update_period`, except
+            in the first seconds after connecting and when the field goes stale or
+            current
 
         Returns
         -------
         Function that removes the listener
         """
-        return self._listeners.on_disconnect.add(listener)
+        listeners = self._throttled_listeners if throttled else self._field_listeners
+        return listeners[name].add(listener)
 
-    def on_connection_state_change(self, listener: ConnectionStateListener):
-        return self._listeners.on_connection_state_change.add(listener)
+    def _publish(self, names: Iterable[str], *, throttle: bool = True) -> None:
+        """Notify the listeners of the fields `names`"""
+        for name in names:
+            if throttle:
+                self._publish_throttled(name)
+            elif listeners := self._throttled_listeners.get(name):
+                listeners()
+            if listeners := self._field_listeners.get(name):
+                listeners()
 
-    def on_data_received(self, listener: DataReceivedListener):
-        return self._listeners.on_data_received.add(listener)
-
-    def on_data_send(self, listener: DataSendListener):
-        return self._listeners.on_data_send.add(listener)
-
-    def register_callback(
-        self, callback: Callable[[], None], propname: str | None = None
-    ) -> None:
-        """Register callback that is called when the given property changes"""
-        if propname is None:
-            self._callbacks.add(callback)
-        else:
-            self._callbacks_map[propname].add(callback)
-
-    def remove_callback(
-        self, callback: Callable[[], None], propname: str | None = None
-    ) -> None:
-        if propname is None:
-            self._callbacks.discard(callback)
-        else:
-            self._callbacks_map[propname].discard(callback)
-
-    def update_callback(self, propname: "str | Field[Any]") -> None:
-        """Call callbacks registered for the property, throttled by update period"""
-        if isinstance(propname, Field):
-            propname = propname.public_name
-
-        self._props_to_update.add(propname)
+    def _publish_throttled(self, name: str) -> None:
+        self._props_to_update.add(name)
 
         if self._update_period != 0:
             now = time.time()
@@ -465,27 +361,7 @@ class DeviceBase(abc.ABC):
             self._last_updated = now
 
         for prop in self._props_to_update:
-            for callback in self._callbacks_map.get(prop, set()):
-                callback()
-        for callback in self._callbacks:
-            callback()
+            if listeners := self._throttled_listeners.get(prop):
+                listeners()
 
         self._props_to_update.clear()
-
-    def register_state_update_callback(
-        self, state_update_callback: Callable[[Any], None], propname: str
-    ):
-        """Register callback that receives the new value of the property"""
-        self._state_update_callbacks[propname].add(state_update_callback)
-
-    def remove_state_update_callback(
-        self, callback: Callable[[Any], None], propname: str
-    ):
-        self._state_update_callbacks[propname].discard(callback)
-
-    def update_state(self, propname: "str | Field[Any]", value: Any):
-        if isinstance(propname, Field):
-            propname = propname.public_name
-
-        for update in self._state_update_callbacks.get(propname, set()):
-            update(value)

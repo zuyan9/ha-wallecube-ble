@@ -73,8 +73,8 @@ body:
     attributes:
       label: Diagnostics
       description: |
-        Enable packet collection in the integration options, wait a minute, then download
-        diagnostics from the device page and attach the file after submitting. See
+        Download diagnostics from the device page right after the problem occurred and
+        attach the file after submitting. See
         https://github.com/zuyan9/ha-wallecube-ble/blob/main/docs/troubleshooting.md#diagnostics
         for what the download contains.
 
@@ -83,6 +83,7 @@ body:
     attributes:
       label: Relevant log output
       description: |
-        If the default log doesn't show anything useful, turn on "Log device connection
-        details" under Logging Options in the integration options.
+        If the default log doesn't show anything useful, enable debug logging for the
+        integration, see
+        https://github.com/zuyan9/ha-wallecube-ble/blob/main/docs/troubleshooting.md#logs
       render: shell

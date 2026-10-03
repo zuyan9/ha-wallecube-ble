@@ -84,10 +84,6 @@ class SessionCipher:
     def token(self) -> int:
         return self._session_key.token
 
-    @property
-    def key(self) -> bytes:
-        return self._session_key.key
-
     def encrypt(self, plaintext: bytes) -> bytes:
         if remainder := len(plaintext) % AES.block_size:
             plaintext += bytes(AES.block_size - remainder)

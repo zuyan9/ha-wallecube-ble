@@ -1,7 +1,6 @@
 """WalleCube BLE binary sensor"""
 
-from dataclasses import dataclass
-from typing import Final, TypedDict, Unpack
+from typing import Final
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -13,81 +12,47 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DeviceConfigEntry
-from .entity import WalleCubeEntity, resolve_entity_description_keys
-from .wclib import DeviceBase
+from .entity import WalleCubeEntity
 
 
-@dataclass(frozen=True, kw_only=True)
-class WalleCubeBinarySensorEntityDescription(BinarySensorEntityDescription):
-    indexed_range: range | None = None
-
-
-class _BinarySensorKwargs(TypedDict, total=False):
-    translation_key: str
-    translation_placeholders: dict[str, str]
-    indexed_range: range
-    entity_category: EntityCategory
-
-
-def _make_desc(
-    device_class: BinarySensorDeviceClass | None,
-    key: str = "",
+def _binary_sensor(
+    key: str,
+    device_class: BinarySensorDeviceClass | None = None,
     *,
-    enabled: bool = True,
-    **kwargs: Unpack[_BinarySensorKwargs],
-) -> WalleCubeBinarySensorEntityDescription:
-    return WalleCubeBinarySensorEntityDescription(
+    diagnostic: bool = False,
+) -> BinarySensorEntityDescription:
+    return BinarySensorEntityDescription(
         key=key,
         device_class=device_class,
-        entity_registry_enabled_default=enabled,
-        **kwargs,
+        entity_category=EntityCategory.DIAGNOSTIC if diagnostic else None,
     )
 
 
-def power(
-    key: str = "", *, enabled: bool = True, **kwargs: Unpack[_BinarySensorKwargs]
-) -> WalleCubeBinarySensorEntityDescription:
-    return _make_desc(BinarySensorDeviceClass.POWER, key, enabled=enabled, **kwargs)
+_PROBLEM = BinarySensorDeviceClass.PROBLEM
 
-
-def battery_charging(
-    key: str = "", *, enabled: bool = True, **kwargs: Unpack[_BinarySensorKwargs]
-) -> WalleCubeBinarySensorEntityDescription:
-    return _make_desc(
-        BinarySensorDeviceClass.BATTERY_CHARGING, key, enabled=enabled, **kwargs
+BINARY_SENSOR_TYPES: Final[dict[str, BinarySensorEntityDescription]] = {
+    description.key: description
+    for description in (
+        _binary_sensor("input_power_ok", BinarySensorDeviceClass.POWER),
+        _binary_sensor("charging", BinarySensorDeviceClass.BATTERY_CHARGING),
+        _binary_sensor("discharging"),
+        # primary, they decide when to shut equipment down
+        _binary_sensor("overload", _PROBLEM),
+        _binary_sensor("shutdown_imminent", _PROBLEM),
+        _binary_sensor("battery_fault", _PROBLEM, diagnostic=True),
+        _binary_sensor(
+            "over_temperature", BinarySensorDeviceClass.HEAT, diagnostic=True
+        ),
+        _binary_sensor(
+            "under_temperature", BinarySensorDeviceClass.COLD, diagnostic=True
+        ),
+        _binary_sensor("input_over_voltage", _PROBLEM, diagnostic=True),
+        _binary_sensor("output_over_current", _PROBLEM, diagnostic=True),
+        _binary_sensor(
+            "wifi_connected", BinarySensorDeviceClass.CONNECTIVITY, diagnostic=True
+        ),
     )
-
-
-def problem(
-    key: str = "", *, enabled: bool = True, **kwargs: Unpack[_BinarySensorKwargs]
-) -> WalleCubeBinarySensorEntityDescription:
-    return _make_desc(BinarySensorDeviceClass.PROBLEM, key, enabled=enabled, **kwargs)
-
-
-_BINARY_SENSORS: Final[dict[str, BinarySensorEntityDescription]] = {
-    "input_power_ok": power(),
-    "charging": battery_charging(),
-    "discharging": _make_desc(None),
-    # primary, they decide when to shut equipment down
-    "overload": problem(),
-    "shutdown_imminent": problem(),
-    "battery_fault": problem(entity_category=EntityCategory.DIAGNOSTIC),
-    "over_temperature": _make_desc(
-        BinarySensorDeviceClass.HEAT, entity_category=EntityCategory.DIAGNOSTIC
-    ),
-    "under_temperature": _make_desc(
-        BinarySensorDeviceClass.COLD, entity_category=EntityCategory.DIAGNOSTIC
-    ),
-    "input_over_voltage": problem(entity_category=EntityCategory.DIAGNOSTIC),
-    "output_over_current": problem(entity_category=EntityCategory.DIAGNOSTIC),
-    "wifi_connected": _make_desc(
-        BinarySensorDeviceClass.CONNECTIVITY, entity_category=EntityCategory.DIAGNOSTIC
-    ),
 }
-
-BINARY_SENSOR_TYPES: Final[dict[str, BinarySensorEntityDescription]] = (
-    resolve_entity_description_keys(_BINARY_SENSORS)
-)
 
 
 async def async_setup_entry(
@@ -95,27 +60,17 @@ async def async_setup_entry(
     config_entry: DeviceConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add binary sensors for passed config_entry in HA"""
     device = config_entry.runtime_data
-
-    new_sensors = [
-        WalleCubeBinarySensor(device, sensor)
-        for sensor in BINARY_SENSOR_TYPES
-        if hasattr(device, sensor)
-    ]
-
-    if new_sensors:
-        async_add_entities(new_sensors)
+    async_add_entities(
+        WalleCubeBinarySensor(device, description)
+        for description in BINARY_SENSOR_TYPES.values()
+        if hasattr(device, description.key)
+    )
 
 
 class WalleCubeBinarySensor(WalleCubeEntity, BinarySensorEntity):
     """Binary sensor backed by a boolean device field"""
 
-    def __init__(self, device: DeviceBase, sensor: str):
-        super().__init__(device)
-
-        self._attr_unique_id = f"wc_{device.identifier}_{sensor}"
-        self.entity_description = BINARY_SENSOR_TYPES[sensor]
-        if self.entity_description.translation_key is None:
-            self._attr_translation_key = self.entity_description.key
-        self._register_update_callback("_attr_is_on", sensor)
+    @property
+    def is_on(self) -> bool | None:
+        return self._value

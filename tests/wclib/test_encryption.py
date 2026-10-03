@@ -7,7 +7,6 @@ from custom_components.wallecube_ble.wclib.encryption import (
     derive_session_key,
 )
 from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
-from custom_components.wallecube_ble.wclib.keydata import SESSION_SECRET
 from custom_components.wallecube_ble.wclib.packet import (
     FRAME_MAGIC,
     ConfigMessage,
@@ -16,15 +15,12 @@ from custom_components.wallecube_ble.wclib.packet import (
     encode_config_message,
 )
 
-# vectors of the firmware key schedule for two addresses of one (synthetic) unit
+# vectors of the firmware key schedule for two addresses of one (synthetic) unit, they
+# pin the secret and that the token is digest bytes 8-11 read big-endian
 KEY_VECTORS = [
     ("0a1b2c3d4e50", "12226d8d36e6bfcd93be41626e885160", 0x93BE4162),
     ("0a1b2c3d4e52", "74711d0562d0c80ca1c8baf7302a1a99", 0xA1C8BAF7),
 ]
-
-
-def test_session_secret_length():
-    assert len(SESSION_SECRET) == 123
 
 
 @pytest.mark.parametrize(("base_mac", "key", "token"), KEY_VECTORS)
@@ -33,12 +29,6 @@ def test_derive_session_key(base_mac: str, key: str, token: int):
 
     assert session_key.key.hex() == key
     assert session_key.token == token
-
-
-def test_token_is_big_endian_digest_bytes_8_to_11():
-    session_key = derive_session_key(bytes.fromhex("0a1b2c3d4e50"))
-
-    assert session_key.token == int.from_bytes(session_key.key[8:12], "big")
 
 
 def test_command_frame_serializes_token_little_endian():
@@ -52,15 +42,6 @@ def test_command_frame_serializes_token_little_endian():
     assert frame[2:6] == session_key.key[8:12][::-1]
     assert frame[6:10] == b"\xa1\xa2\xa3\xa4"
     assert frame[10:] == b"\x01"
-
-
-def test_command_frame_places_payload_after_random_nonce():
-    first = encode_command(0x01020304, b"\x02")
-    second = encode_command(0x01020304, b"\x02")
-
-    # the firmware reads the payload at offset 10 regardless of the nonce
-    assert len(first) == len(second) == 11
-    assert first[10:] == second[10:] == b"\x02"
 
 
 def test_command_frame_rejects_wrong_nonce_size():

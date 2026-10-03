@@ -15,15 +15,6 @@ def pdiv(
     return _divide
 
 
-def pround(precision: int = 2) -> Callable[[float | None], float | None]:
-    """Return a transform that rounds to the given precision"""
-
-    def _round(value: float | None) -> float | None:
-        return None if value is None else round(value, precision)
-
-    return _round
-
-
 def prop_has_bit_on(bit_position: int) -> Callable[[int | None], bool | None]:
     """Return a transform that checks whether a specific bit is set"""
 

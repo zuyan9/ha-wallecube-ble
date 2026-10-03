@@ -21,4 +21,5 @@ jobs:
         with:
           python-version: 3.x
       - name: Tests
-        run: uv run pytest tests/wclib
+        # the Home Assistant tests skip without Home Assistant
+        run: uv run pytest

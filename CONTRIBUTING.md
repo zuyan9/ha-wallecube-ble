@@ -23,7 +23,7 @@ connected (local adapter or proxy) and, ideally, a diagnostics download.
 
 Use the [sensor template](https://github.com/zuyan9/ha-wallecube-ble/issues/new?template=sensor_request.yaml)
 and compare the value with what the device display shows at the same moment. A
-diagnostics download with packet collection enabled lets us check the raw telemetry.
+diagnostics download taken at the same time lets us check the raw telemetry.
 
 ### Testing another WalleCube model
 
@@ -50,25 +50,22 @@ uv sync --all-groups
 ```
 
 This creates `.venv/` with the runtime dependencies and the `dev`, `test`, `lint` and
-`hass` groups. The `hass` group installs Home Assistant for editor support; the library
-tests do not need it.
+`hass` groups. The `hass` group installs Home Assistant for editor support and for the
+tests in `tests/ha/`; the library tests do not need it.
 
 ### Running tests
 
 ```bash
-uv run pytest tests/wclib
+uv run --with aiohasupervisor --with serialx pytest
 ```
 
-The library tests run without Home Assistant. Use `uv run pytest -k <name>` for a single
-test. Add tests for protocol changes next to the existing ones in `tests/wclib/`.
+This runs the library tests in `tests/wclib/` and the Home Assistant tests in
+`tests/ha/`. Some of Home Assistant's Bluetooth dependencies are not declared by the
+`hass` group, hence the `--with`. Without them, plain `uv run pytest` runs the library
+tests and skips the Home Assistant ones. Use `-k <name>` for a single test.
 
-Entity tests in `tests/ha/` need Home Assistant and are skipped without it. Some of
-Home Assistant's Bluetooth dependencies are not declared by the `hass` group, so add
-them when running:
-
-```bash
-uv run --with aiohasupervisor --with serialx pytest tests/ha
-```
+`tests/fakes.py` holds a fake UPS that encrypts like the real one. Add tests for
+protocol changes next to the existing ones in `tests/wclib/`.
 
 ### Code style and linting
 

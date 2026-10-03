@@ -10,11 +10,9 @@ from .props import UpdatableProps
 
 def NewDevice(ble_dev: BLEDevice, adv_data: AdvertisementData) -> DeviceBase | None:
     """Return Device if ble dev fits the requirements otherwise None"""
-    for item in devices.devices:
-        if (device := getattr(item, "Device", None)) is not None and device.check(
-            adv_data
-        ):
-            return item.Device(ble_dev, adv_data)
+    for module in devices.devices:
+        if module.Device.check(adv_data):
+            return module.Device(ble_dev, adv_data)
     return None
 
 

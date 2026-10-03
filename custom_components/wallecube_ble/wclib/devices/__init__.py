@@ -1,21 +1,4 @@
-import importlib
-from pathlib import Path
-from types import ModuleType
-from typing import TYPE_CHECKING, Protocol
+from . import w150
 
-if TYPE_CHECKING:
-    from ..devicebase import DeviceBase
-
-    class ModuleWithDevice(Protocol):
-        Device: type[DeviceBase]
-
-
-__all__ = sorted(
-    f.stem
-    for f in Path(__file__).parent.glob("*.py")
-    if f.is_file() and not f.stem.startswith("_")
-)
-
-devices: list["ModuleWithDevice | ModuleType"] = [
-    importlib.import_module(f".{device}", __name__) for device in __all__
-]
+# each module defines `Device`, tried in this order
+devices = [w150]

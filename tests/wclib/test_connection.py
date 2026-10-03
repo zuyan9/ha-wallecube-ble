@@ -3,14 +3,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import MAX_CONNECT_ATTEMPTS
-from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib.connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     CONFIG_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
+    MAX_ERRORS_BEFORE_RECONNECT,
     TELEMETRY_CHARACTERISTIC_UUID,
     Connection,
     ConnectionState,
@@ -23,141 +23,84 @@ from custom_components.wallecube_ble.wclib.exceptions import (
     PacketParseError,
     SessionKeyError,
 )
-
-ADDRESS = "0A:1B:2C:3D:4E:52"
-BASE_MAC = bytes.fromhex("0a1b2c3d4e50")
-
-
-def info_ciphertext(base_mac: bytes = BASE_MAC) -> bytes:
-    # magic, unused byte, two words from the power board, then two firmware constants
-    plaintext = bytes.fromhex("5100 0301 0200 0300 1300")
-    return SessionCipher(derive_session_key(base_mac)).encrypt(plaintext)
-
-
-@pytest.fixture
-def client():
-    client = MagicMock()
-    client.is_connected = True
-    client.read_gatt_char = AsyncMock(return_value=bytearray(info_ciphertext()))
-    client.write_gatt_char = AsyncMock()
-    client.start_notify = AsyncMock()
-    client.stop_notify = AsyncMock()
-    client.disconnect = AsyncMock()
-    client.services.get_characteristic = MagicMock(
-        side_effect=lambda uuid: SimpleNamespace(uuid=uuid)
-    )
-    return client
-
-
-@pytest.fixture
-def establish(mocker: MockerFixture, client):
-    return mocker.patch(
-        "custom_components.wallecube_ble.wclib.connection.establish_connection",
-        new=AsyncMock(return_value=client),
-    )
+from tests.fakes import (
+    ADDRESS,
+    BASE_MAC,
+    CIPHER,
+    LOCAL_NAME,
+    W150_INFO,
+    ble_device,
+    config_frame,
+    drop_link,
+    encrypted,
+    notify_handler,
+    telemetry_frame,
+)
 
 
 def make_connection(
-    data_parse=None, base_mac_hint: bytes | None = BASE_MAC, config_parse=None
+    base_mac_hint: bytes | None = BASE_MAC,
+    config_parse=None,
+    data_parse=None,
+    ble_dev: BLEDevice | None = None,
 ):
-    ble_dev = MagicMock(address=ADDRESS)
-    ble_dev.name = "Walle-0A1B2C3D4E50"
     return Connection(
-        ble_dev=ble_dev,
+        ble_dev=ble_dev or ble_device(),
         data_parse=data_parse or AsyncMock(return_value=True),
         base_mac_hint=base_mac_hint,
         config_parse=config_parse,
-    ).with_disabled_reconnect()
-
-
-def notify_handler(client, uuid: str):
-    for args in client.start_notify.await_args_list:
-        if args.args[0].uuid == uuid:
-            return args.args[1]
-    raise AssertionError(f"{uuid} was not subscribed")
-
-
-def config_ciphertext(message_type: int, payload: bytes, token: int) -> bytes:
-    plaintext = (
-        bytes([0x40 | message_type, len(payload)])
-        + b"\x12\x34"
-        + token.to_bytes(4, "little")
-        + payload
     )
-    return SessionCipher(derive_session_key(BASE_MAC)).encrypt(plaintext)
 
 
-async def test_connect_establishes_session_from_advertised_name(establish, client):
-    conn = make_connection()
+@pytest.mark.parametrize("from_name", [True, False])
+async def test_connect_establishes_the_session(establish, client, from_name: bool):
+    # without the advertised name the factory MAC is derived from the address
+    conn = make_connection(base_mac_hint=BASE_MAC if from_name else None)
 
     await conn.connect()
 
     assert conn.state is ConnectionState.AUTHENTICATED
     assert conn.session_established
-    assert conn.base_mac_from_name
-    assert conn.base_mac_offset == -2
+    assert conn.base_mac_from_name is from_name
     # responses carry no length, the payload includes the block's zero padding
-    assert conn.info == bytes.fromhex("00 0301 0200 0300 1300") + bytes(6)
+    assert conn.info == W150_INFO + bytes(6)
     client.start_notify.assert_awaited_once()
     assert client.start_notify.await_args.args[0].uuid == TELEMETRY_CHARACTERISTIC_UUID
 
 
-async def test_connect_falls_back_to_address_offsets(establish):
-    conn = make_connection(base_mac_hint=None)
-
-    await conn.connect()
-
-    assert conn.state is ConnectionState.AUTHENTICATED
-    assert not conn.base_mac_from_name
-    assert conn.base_mac_offset == -2
-
-
 async def test_wrong_key_fails_authentication(establish, client):
-    client.read_gatt_char.return_value = bytearray(
-        info_ciphertext(bytes.fromhex("aabbccddeeff"))
-    )
+    wrong_key = SessionCipher(derive_session_key(bytes.fromhex("aabbccddeeff")))
+    client.read_gatt_char.return_value = encrypted(b"\x51" + W150_INFO, wrong_key)
     conn = make_connection()
     disconnects = MagicMock()
-    conn.on_disconnect(disconnects)
+    received = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
+    conn.listeners.on_data_received.add(received)
 
-    await conn.connect()
+    with pytest.raises(SessionKeyError):
+        await conn.connect()
 
     assert conn.state is ConnectionState.ERROR_AUTH_FAILED
     disconnects.assert_called_once()
     client.disconnect.assert_awaited()
-    with pytest.raises(SessionKeyError):
-        await conn.wait_until_authenticated_or_error(raise_on_error=True)
-
-
-async def test_telemetry_notifications_are_forwarded(establish, client):
-    data_parse = AsyncMock(return_value=True)
-    received = MagicMock()
-    conn = make_connection(data_parse)
-    conn.on_data_received(received)
-    await conn.connect()
-
-    handler = client.start_notify.await_args.args[1]
-    await handler(None, bytearray(b"\x51\x00" + bytes(38)))
-
-    data_parse.assert_awaited_once_with(b"\x51\x00" + bytes(38))
-    assert received.call_args.args == ("F0B1", b"\x51\x00" + bytes(38))
+    # the info block of a failed session is not passed on
+    received.assert_not_called()
 
 
 async def test_data_listeners_get_decrypted_payloads_only(establish, client):
-    cipher = SessionCipher(derive_session_key(BASE_MAC))
     conn = make_connection(config_parse=AsyncMock(return_value=True))
     received = MagicMock()
     sent = MagicMock()
-    conn.on_data_received(received)
-    conn.on_data_send(sent)
+    conn.listeners.on_data_received.add(received)
+    conn.listeners.on_data_send.add(sent)
     await conn.connect()
 
-    client.read_gatt_char.return_value = bytearray(cipher.encrypt(b"\x51\x01"))
-    await conn.read_value(ADAPTER_CHARACTERISTIC_UUID)
+    client.read_gatt_char.return_value = encrypted(b"\x51\x01")
+    assert await conn.read_value(ADAPTER_CHARACTERISTIC_UUID) == b"\x01" + bytes(14)
     await conn.send_command(ADAPTER_CHARACTERISTIC_UUID, b"\x02")
     await conn.send_config(0x0C)
     handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
-    await handler(None, bytearray(config_ciphertext(0x0C, b"\x2c\x01", cipher.token)))
+    await handler(None, config_frame(0x0C, b"\x2c\x01"))
 
     # nothing encrypted and no session token, either would let anyone test guessed MAC
     # addresses
@@ -169,27 +112,19 @@ async def test_data_listeners_get_decrypted_payloads_only(establish, client):
     assert sent.call_args_list == [call("F0B2", b"\x02"), call("F0C1/0C", b"")]
 
 
-async def test_failed_session_passes_on_no_data(establish, client):
-    client.read_gatt_char.return_value = bytearray(
-        info_ciphertext(bytes.fromhex("aabbccddeeff"))
-    )
-    conn = make_connection()
-    received = MagicMock()
-    conn.on_data_received(received)
-
-    await conn.connect()
-
-    assert conn.state is ConnectionState.ERROR_AUTH_FAILED
-    received.assert_not_called()
-
-
-async def test_connection_messages_do_not_name_the_factory_mac(establish):
-    conn = make_connection()
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [(LOCAL_NAME, "Walle-0A1B2C******"), (None, "0A:1B:2C:**:**:**")],
+)
+async def test_connection_messages_do_not_name_the_factory_mac(
+    establish, name: str | None, shown: str
+):
+    conn = make_connection(ble_dev=BLEDevice(ADDRESS, name, None))
 
     await conn.connect()
 
     # bleak-retry-connector puts this name into its log lines and error messages
-    assert establish.await_args.args[2] == "Walle-0A1B2C******"
+    assert establish.await_args.args[2] == shown
 
 
 async def test_send_command_writes_authenticated_frame(establish, client):
@@ -200,10 +135,9 @@ async def test_send_command_writes_authenticated_frame(establish, client):
 
     characteristic, frame = client.write_gatt_char.await_args.args
     assert characteristic.uuid == "0000f0b9-0000-1000-8000-00805f9b34fb"
-    session_key = derive_session_key(BASE_MAC)
-    plaintext = SessionCipher(session_key).decrypt(frame)
+    plaintext = CIPHER.decrypt(frame)
     assert plaintext[:2] == b"\x51\x00"
-    assert int.from_bytes(plaintext[2:6], "little") == session_key.token
+    assert int.from_bytes(plaintext[2:6], "little") == CIPHER.token
     assert plaintext[10] == 0x01
 
 
@@ -256,38 +190,74 @@ async def test_confirmed_command_rejects_an_unexpected_result(establish, client)
         )
 
 
-async def test_read_value_decrypts_response(establish, client):
+def report_end_of_link(establish, client) -> None:
+    """Let bleak report the end of the link while the client disconnects"""
+
+    async def disconnect():
+        drop_link(establish, client)
+
+    client.disconnect.side_effect = disconnect
+
+
+async def test_disconnect_is_not_reported_as_a_lost_link(establish, client):
     conn = make_connection()
+    disconnects = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
     await conn.connect()
-    client.read_gatt_char.return_value = bytearray(
-        SessionCipher(derive_session_key(BASE_MAC)).encrypt(b"\x51\x01")
-    )
-
-    value = await conn.read_value(INFO_CHARACTERISTIC_UUID)
-
-    assert value[:1] == b"\x01"
-
-
-async def test_disconnect_sets_disconnected(establish, client):
-    conn = make_connection()
-    await conn.connect()
+    report_end_of_link(establish, client)
 
     await conn.disconnect()
 
     assert conn.state is ConnectionState.DISCONNECTED
     client.disconnect.assert_awaited_once()
+    disconnects.assert_not_called()
+
+
+async def test_lost_link_is_reported_without_an_error(establish, client):
+    conn = make_connection()
+    disconnects = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
+    await conn.connect()
+
+    drop_link(establish, client)
+
+    assert conn.state is ConnectionState.DISCONNECTED
+    disconnects.assert_called_once_with(None)
+
+
+async def test_too_many_errors_in_a_row_end_the_connection(establish, client):
+    error = ValueError("broken field")
+    errors = [error] * MAX_ERRORS_BEFORE_RECONNECT
+    # a processed frame starts the count again
+    parse = AsyncMock(side_effect=[*errors, True, *errors, error])
+    conn = make_connection(data_parse=parse)
+    disconnects = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
+    await conn.connect()
+    report_end_of_link(establish, client)
+
+    # errors up to the limit, a processed frame, errors up to the limit again
+    for _ in range(2 * MAX_ERRORS_BEFORE_RECONNECT + 1):
+        await notify_handler(client)(None, bytearray(telemetry_frame()))
+
+    assert conn.state is ConnectionState.AUTHENTICATED
+    disconnects.assert_not_called()
+
+    await notify_handler(client)(None, bytearray(telemetry_frame()))
+
+    assert conn.state is ConnectionState.ERROR_TOO_MANY_ERRORS
+    client.disconnect.assert_awaited_once()
+    # once, with the error: the end of the link bleak reports is not passed on again
+    disconnects.assert_called_once_with(error)
 
 
 async def test_config_notifications_are_decrypted_and_forwarded(establish, client):
     config_parse = AsyncMock(return_value=True)
     conn = make_connection(config_parse=config_parse)
     await conn.connect()
-    token = derive_session_key(BASE_MAC).token
 
     handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
-    await handler(
-        None, bytearray(config_ciphertext(0x0C, b"\x2c\x01\x00\x00\x46", token))
-    )
+    await handler(None, config_frame(0x0C, b"\x2c\x01\x00\x00\x46"))
 
     message = config_parse.await_args.args[0]
     assert message.message_type == 0x0C
@@ -300,7 +270,7 @@ async def test_config_notifications_with_foreign_token_are_ignored(establish, cl
     await conn.connect()
 
     handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
-    await handler(None, bytearray(config_ciphertext(0x0C, bytes(5), 0x11223344)))
+    await handler(None, config_frame(0x0C, bytes(5), token=0x11223344))
 
     config_parse.assert_not_awaited()
 
@@ -311,10 +281,10 @@ async def test_truncated_config_notification_warns_once(establish, client, caplo
     await conn.connect()
     handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
     # a Wi-Fi status reply cut to 20 bytes by the default ATT MTU
-    frame = config_ciphertext(0x01, bytes(21), 0)[:20]
+    frame = config_frame(0x01, bytes(21), token=0)[:20]
 
-    await handler(None, bytearray(frame))
-    await handler(None, bytearray(frame))
+    await handler(None, frame)
+    await handler(None, frame)
 
     config_parse.assert_not_awaited()
     warnings = [r for r in caplog.records if "MTU" in r.getMessage()]
@@ -329,11 +299,10 @@ async def test_send_config_writes_config_frame(establish, client):
 
     characteristic, frame = client.write_gatt_char.await_args.args
     assert characteristic.uuid == CONFIG_CHARACTERISTIC_UUID
-    session_key = derive_session_key(BASE_MAC)
-    plaintext = SessionCipher(session_key).decrypt(frame)
+    plaintext = CIPHER.decrypt(frame)
     # type 0x0B tagged with 0x40, payload length, 2-byte nonce, token, payload
     assert plaintext[:2] == b"\x4b\x04"
-    assert int.from_bytes(plaintext[4:8], "little") == session_key.token
+    assert int.from_bytes(plaintext[4:8], "little") == CIPHER.token
     assert plaintext[8:12] == b"\x58\x02\x00\x00"
 
 
@@ -389,42 +358,30 @@ async def test_failed_config_subscription_keeps_telemetry(establish, client):
     await conn.connect()
 
     assert conn.state is ConnectionState.AUTHENTICATED
-    assert notify_handler(client, TELEMETRY_CHARACTERISTIC_UUID) is not None
+    assert notify_handler(client) is not None
 
 
+@pytest.mark.parametrize(
+    "dropped_during", [TELEMETRY_CHARACTERISTIC_UUID, CONFIG_CHARACTERISTIC_UUID]
+)
 @pytest.mark.parametrize("subscription_fails", [True, False])
 async def test_disconnect_while_subscribing_fails_the_connection(
-    establish, client, subscription_fails: bool
+    establish, client, subscription_fails: bool, dropped_during: str
 ):
     async def start_notify(characteristic, handler, **kwargs):
-        if characteristic.uuid == CONFIG_CHARACTERISTIC_UUID:
+        if characteristic.uuid == dropped_during:
             # bleak reports the dropped link while the subscription is pending
-            client.is_connected = False
-            establish.await_args.kwargs["disconnected_callback"](client)
+            drop_link(establish, client)
             if subscription_fails:
                 raise BleakError("Not connected")
 
     client.start_notify.side_effect = start_notify
     conn = make_connection(config_parse=AsyncMock())
 
-    await conn.connect()
+    with pytest.raises(BleakError):
+        await conn.connect()
 
     assert conn.state is ConnectionState.ERROR_BLEAK
-    with pytest.raises(BleakError):
-        await conn.wait_until_authenticated_or_error(raise_on_error=True)
-
-
-async def test_unlimited_attempts_never_give_up(establish):
-    establish.side_effect = BleakError("No backend with an available connection slot")
-    conn = make_connection()
-
-    for _ in range(MAX_CONNECT_ATTEMPTS * 2):
-        await conn.connect(max_attempts=0)
-        assert conn.state is ConnectionState.ERROR_BLEAK
-
-    assert establish.await_count == MAX_CONNECT_ATTEMPTS * 2
-    # bleak-retry-connector still gets a real count for each connect
-    assert establish.await_args.kwargs["max_attempts"] == MAX_CONNECT_ATTEMPTS
 
 
 async def test_only_the_first_failure_in_a_row_is_a_warning(establish, client, caplog):
@@ -432,11 +389,13 @@ async def test_only_the_first_failure_in_a_row_is_a_warning(establish, client, c
     conn = make_connection()
     caplog.set_level(logging.DEBUG)
 
-    await conn.connect(max_attempts=0)
-    await conn.connect(max_attempts=0)
-    await conn.connect(max_attempts=0)
+    for _ in range(2):
+        with pytest.raises(BleakError):
+            await conn.connect()
+    await conn.connect()
     await conn.disconnect()
-    await conn.connect(max_attempts=0)
+    with pytest.raises(BleakError):
+        await conn.connect()
 
     failures = [
         (r.levelno, r.getMessage())
@@ -448,3 +407,23 @@ async def test_only_the_first_failure_in_a_row_is_a_warning(establish, client, c
         (logging.DEBUG, "Connection failed: 2"),
         (logging.WARNING, "Connection failed: 3"),
     ]
+
+
+async def test_connection_failures_are_logged_without_the_address(establish, caplog):
+    establish.side_effect = BleakError(
+        "Walle-0A1B2C3D4E50 - 0A:1B:2C:3D:4E:52: Failed to connect: "
+        "/org/bluez/hci0/dev_0A_1B_2C_3D_4E_52 not found"
+    )
+
+    with pytest.raises(BleakError):
+        await make_connection().connect()
+
+    assert caplog.messages == [
+        "Connection failed: Walle-0A1B2C****** - 0A:1B:2C:**:**:**: Failed to "
+        "connect: /org/bluez/hci0/dev_0A_1B_2C_**_**_** not found",
+    ]
+    # named like the device by the last four digits of the address
+    assert (
+        caplog.records[0].name
+        == "custom_components.wallecube_ble.wclib.connection.4E52"
+    )

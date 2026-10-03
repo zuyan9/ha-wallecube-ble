@@ -1,8 +1,8 @@
 import asyncio
 import json
+import logging
 import struct
-from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 from bleak.exc import BleakError
@@ -12,74 +12,22 @@ from custom_components.wallecube_ble.wclib import NewDevice
 from custom_components.wallecube_ble.wclib.connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     CONFIG_CHARACTERISTIC_UUID,
-    TELEMETRY_CHARACTERISTIC_UUID,
     UPS_SERVICE_UUID,
     ConnectionState,
 )
 from custom_components.wallecube_ble.wclib.devices.w150 import Device, PowerEvent
-from custom_components.wallecube_ble.wclib.encryption import (
-    SessionCipher,
-    derive_session_key,
-)
 from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
+from tests.fakes import (
+    CIPHER,
+    advertisement,
+    ble_device,
+    config_frame,
+    encrypted,
+    notify_handler,
+    telemetry_frame,
+)
 
 ON_BATTERY = 1 << 8
-
-
-def telemetry_frame(
-    *,
-    input_mv: int = 12_150,
-    input_ma: int = 2_210,
-    output_mv: int = 12_020,
-    output_ma: int = 1_530,
-    battery_permille: int = 875,
-    battery_mv: int = 12_480,
-    cells_mv: tuple[int, int, int, int] = (3_122, 3_118, 3_122, 3_117),
-    battery_ma: int = -1_450,
-    temperature_decidegrees: int = 253,
-    cycles: int = 12,
-    remaining_seconds: int = 7_260,
-    energy_raw: int = 1_234_567,
-    fault_flags: int = 0,
-    status_flags: int = 0,
-    event: int = 0,
-) -> bytes:
-    """Build a 40-byte telemetry notification: magic, event byte, 38-byte payload"""
-    payload = struct.pack(
-        "<HHHHHH4HhhHHIIH",
-        input_mv,
-        input_ma,
-        output_mv,
-        output_ma,
-        battery_permille,
-        battery_mv,
-        *cells_mv,
-        battery_ma,
-        temperature_decidegrees,
-        cycles,
-        remaining_seconds,
-        energy_raw,
-        fault_flags,
-        status_flags,
-    )
-    assert len(payload) == 38
-    return bytes([0x51, event]) + payload
-
-
-@pytest.fixture
-def adv_data(mocker: MockerFixture):
-    adv = mocker.MagicMock()
-    adv.local_name = "Walle-0A1B2C3D4E50"
-    adv.service_uuids = [UPS_SERVICE_UUID]
-    return adv
-
-
-@pytest.fixture
-def device(mocker: MockerFixture, adv_data):
-    ble_dev = mocker.Mock()
-    ble_dev.address = "0A:1B:2C:3D:4E:52"
-    ble_dev.name = adv_data.local_name
-    return Device(ble_dev, adv_data)
 
 
 def test_check_matches_advertised_name_or_service(mocker: MockerFixture):
@@ -92,10 +40,8 @@ def test_check_matches_advertised_name_or_service(mocker: MockerFixture):
     assert not Device.check(other)
 
 
-def test_new_device_is_named_without_a_model(mocker: MockerFixture, adv_data):
-    ble_dev = mocker.Mock(address="0A:1B:2C:3D:4E:52")
-
-    device = NewDevice(ble_dev, adv_data)
+def test_new_device_is_named_without_a_model():
+    device = NewDevice(ble_device(), advertisement(UPS_SERVICE_UUID))
 
     # the advertisement does not tell the models apart
     assert isinstance(device, Device)
@@ -107,27 +53,18 @@ def test_new_device_is_named_without_a_model(mocker: MockerFixture, adv_data):
 async def test_parses_telemetry_in_display_units(device: Device):
     processed = await device.data_parse(telemetry_frame())
 
+    # field names follow the vendor app, the battery details the vendor cloud
     assert processed is True
     assert device.dc_input_voltage == 12.15
+    assert device.dc_input_current == 2.21
     assert device.dc_output_voltage == 12.02
     assert device.dc_output_current == 1.53
     assert device.output_power == round(12.02 * 1.53, 2)
     assert device.battery_level == 87.5
+    assert device.battery_voltage == 12.48
     assert device.battery_current == -1.45
     assert device.temperature == 25.3
-
-
-async def test_parses_fields_named_by_vendor_app(device: Device):
-    await device.data_parse(telemetry_frame())
-
-    assert device.dc_input_current == 2.21
-    assert device.battery_voltage == 12.48
     assert device.energy_total == 1.235
-
-
-async def test_parses_battery_fields_named_by_vendor_cloud(device: Device):
-    await device.data_parse(telemetry_frame())
-
     assert device.cell_voltage_1 == 3.122
     assert device.cell_voltage_4 == 3.117
     assert device.cell_voltage_difference == 5
@@ -193,29 +130,25 @@ async def test_maps_fault_flag_bits(device: Device, bit: int, field_name: str | 
     assert device.over_temperature is False
 
 
-async def test_remaining_time_only_while_on_battery(device: Device):
-    await device.data_parse(telemetry_frame(status_flags=0))
-    assert device.remaining_time_discharging is None
-
-    await device.data_parse(telemetry_frame(status_flags=ON_BATTERY))
-    assert device.remaining_time_discharging == 121
-
-
 @pytest.mark.parametrize(
-    "remaining_seconds",
+    ("status_flags", "remaining_seconds", "expected"),
     [
-        0xFFFF,  # no load to estimate from
-        0,  # the battery monitor missed a sample
+        (ON_BATTERY, 7_260, 121),
+        # the UPS shows the remaining time only while on battery
+        (0, 7_260, None),
+        # no load to estimate from, and a sample the battery monitor missed
+        (ON_BATTERY, 0xFFFF, None),
+        (ON_BATTERY, 0, None),
     ],
 )
-async def test_remaining_time_without_an_estimate_is_unknown(
-    device: Device, remaining_seconds: int
+async def test_remaining_time_in_minutes_while_on_battery(
+    device: Device, status_flags: int, remaining_seconds: int, expected: int | None
 ):
     await device.data_parse(
-        telemetry_frame(remaining_seconds=remaining_seconds, status_flags=ON_BATTERY)
+        telemetry_frame(status_flags=status_flags, remaining_seconds=remaining_seconds)
     )
 
-    assert device.remaining_time_discharging is None
+    assert device.remaining_time_discharging == expected
 
 
 @pytest.mark.parametrize(
@@ -235,8 +168,8 @@ async def test_notifies_only_changed_fields(device: Device, mocker: MockerFixtur
 
     voltage_callback = mocker.Mock()
     battery_callback = mocker.Mock()
-    device.register_callback(voltage_callback, "dc_output_voltage")
-    device.register_callback(battery_callback, "battery_level")
+    device.subscribe("dc_output_voltage", voltage_callback, throttled=True)
+    device.subscribe("battery_level", battery_callback, throttled=True)
 
     await device.data_parse(telemetry_frame(output_mv=11_900))
 
@@ -244,15 +177,13 @@ async def test_notifies_only_changed_fields(device: Device, mocker: MockerFixtur
     battery_callback.assert_not_called()
 
 
-async def test_state_update_callback_receives_value(
-    device: Device, mocker: MockerFixture
-):
-    state_callback = mocker.Mock()
-    device.register_state_update_callback(state_callback, "battery_level")
+async def test_listeners_see_the_new_value(device: Device):
+    values = []
+    device.subscribe("battery_level", lambda: values.append(device.battery_level))
 
     await device.data_parse(telemetry_frame(battery_permille=1000))
 
-    state_callback.assert_called_once_with(100.0)
+    assert values == [100.0]
 
 
 def test_data_fields_are_the_values_from_telemetry(device: Device):
@@ -279,9 +210,9 @@ async def test_telemetry_values_go_stale_without_frames(
     level = mocker.Mock()
     charging = mocker.Mock()
     standby = mocker.Mock()
-    device.register_callback(level, "battery_level")
-    device.register_state_update_callback(charging, "charging")
-    device.register_state_update_callback(standby, "standby_time")
+    device.subscribe("battery_level", level, throttled=True)
+    device.subscribe("charging", charging)
+    device.subscribe("standby_time", standby)
 
     assert device._check_data(device._last_data + 59) == pytest.approx(1)
     assert device.data_current
@@ -290,7 +221,7 @@ async def test_telemetry_values_go_stale_without_frames(
 
     assert not device.data_current
     level.assert_called_once()
-    charging.assert_called_once_with(False)
+    charging.assert_called_once()
     standby.assert_not_called()
 
 
@@ -300,13 +231,60 @@ async def test_next_frame_makes_stale_values_current_again(
     await device._on_data(telemetry_frame())
     device._check_data(device._last_data + 60)
     level = mocker.Mock()
-    device.register_callback(level, "battery_level")
+    device.subscribe("battery_level", level, throttled=True)
 
     # the same values as before the gap, they are published nonetheless
     await device._on_data(telemetry_frame())
 
     assert device.data_current
     level.assert_called_once()
+
+
+async def test_throttled_listeners_follow_the_update_period(
+    device: Device, mocker: MockerFixture
+):
+    clock = mocker.patch("custom_components.wallecube_ble.wclib.devicebase.time.time")
+    device.with_update_period(10)
+    level = mocker.Mock()
+    voltage = mocker.Mock()
+    live = mocker.Mock()
+    device.subscribe("battery_level", level, throttled=True)
+    device.subscribe("dc_output_voltage", voltage, throttled=True)
+    device.subscribe("battery_level", live)
+
+    async def frame(at: float, battery_permille: int, output_mv: int = 12_020):
+        clock.return_value = at
+        await device._on_data(
+            telemetry_frame(battery_permille=battery_permille, output_mv=output_mv)
+        )
+
+    # the first seconds pass through, the entities would stay unknown otherwise
+    await frame(1000, 500)
+    await frame(1001, 501)
+    assert level.call_count == 2
+
+    await frame(1007, 502)
+    voltage.reset_mock()
+    await frame(1008, 503)
+    await frame(1009, 503, output_mv=11_900)
+
+    # within the period only the unthrottled listener sees the changes
+    assert level.call_count == 3
+    assert live.call_count == 4
+    voltage.assert_not_called()
+
+    await frame(1017, 504, output_mv=11_900)
+
+    # the voltage changed within the period is delivered with the next update
+    assert level.call_count == 4
+    voltage.assert_called_once()
+
+    clock.return_value = 1018
+    device._check_data(device._last_data + 60)
+
+    # availability changes are not held back by the update period
+    assert level.call_count == 5
+    assert voltage.call_count == 2
 
 
 async def test_decodes_truncated_frame_partially(device: Device):
@@ -326,31 +304,15 @@ async def test_decodes_truncated_frame_partially(device: Device):
     assert device.battery_health is None
 
 
-@pytest.mark.parametrize(
-    ("event", "expected"),
-    [
-        (0, None),
-        (1, PowerEvent.POWER_RESTORED),
-        (2, PowerEvent.POWER_LOST),
-        (7, None),
-    ],
-)
-async def test_parses_event_byte(device: Device, event: int, expected):
-    await device.data_parse(telemetry_frame(event=event))
+async def test_each_power_event_reaches_the_listeners(device: Device):
+    events = []
+    device.subscribe("power_event", lambda: events.append(device.power_event))
 
-    assert device.power_event is expected
-
-
-async def test_each_power_event_reaches_state_callbacks(
-    device: Device, mocker: MockerFixture
-):
-    state_callback = mocker.Mock()
-    device.register_state_update_callback(state_callback, "power_event")
-
-    for event in (2, 0, 1, 0, 2):
+    # only 1 and 2 are events, 7 reads as none like 0
+    for event in (2, 0, 1, 0, 7, 2):
         await device.data_parse(telemetry_frame(event=event))
 
-    assert [c.args[0] for c in state_callback.call_args_list] == [
+    assert events == [
         PowerEvent.POWER_LOST,
         None,
         PowerEvent.POWER_RESTORED,
@@ -359,48 +321,26 @@ async def test_each_power_event_reaches_state_callbacks(
     ]
 
 
-def test_parses_versions_from_info_block(device: Device):
-    # payload after the magic byte: uninitialized byte, power-board hardware and
-    # firmware, front-panel hardware and firmware, zero padding
-    device.info_parse(bytes.fromhex("aa 0300 1d00 0300 1300") + bytes(6))
-
-    assert device.power_board_hardware_version == 3
-    assert device.power_board_firmware_version == 29
-    assert device.hardware_version == 3
-    assert device.firmware_version == 19
-
-
 @pytest.mark.parametrize(
-    ("info", "model", "name"),
+    ("info", "model", "name", "power_board_firmware"),
     [
-        ("00 0300 1d00 0300 1300", "W150", "W150-4E52"),
-        ("00 0400 1d00 0300 1300", "W180", "W180-4E52"),
+        ("aa 0300 1d00 0300 1300", "W150", "W150-4E52", 29),
+        ("00 0400 1d00 0300 1300", "W180", "W180-4E52", 29),
         # the power board did not answer
-        ("00 0000 0000 0300 1300", "WalleCube UPS", "WalleCube-4E52"),
+        ("00 0000 0000 0300 1300", "WalleCube UPS", "WalleCube-4E52", None),
     ],
 )
-def test_model_and_name_follow_power_board_hardware_version(
-    device: Device, info: str, model: str, name: str
+def test_info_block_names_the_model_and_versions(
+    device: Device, info: str, model: str, name: str, power_board_firmware: int | None
 ):
+    # payload after the magic byte: uninitialized byte, power-board hardware and
+    # firmware, front-panel hardware and firmware, zero padding
     device.info_parse(bytes.fromhex(info) + bytes(6))
 
     assert device.device == model
     assert device.name == name
-
-
-def test_set_name_is_kept_when_the_model_is_known(device: Device):
-    device.with_name("UPS")
-
-    device.info_parse(bytes.fromhex("00 0400 1d00 0300 1300") + bytes(6))
-
-    assert device.name == "UPS"
-
-
-def test_power_board_versions_are_unknown_when_not_reported(device: Device):
-    device.info_parse(bytes.fromhex("00 0000 0000 0300 1300") + bytes(6))
-
-    assert device.power_board_firmware_version is None
-    assert device.firmware_version == 19
+    assert device.power_board_firmware_version == power_board_firmware
+    assert (device.hardware_version, device.firmware_version) == (3, 19)
 
 
 async def test_rejects_frame_without_payload(device: Device):
@@ -408,131 +348,73 @@ async def test_rejects_frame_without_payload(device: Device):
         await device.data_parse(b"\x51\x00")
 
 
-@pytest.fixture
-def client(mocker: MockerFixture):
-    info = SessionCipher(derive_session_key(bytes.fromhex("0a1b2c3d4e50"))).encrypt(
-        bytes.fromhex("5100 0301 0200 0300 1300")
-    )
-    client = MagicMock(is_connected=True)
-    client.read_gatt_char = AsyncMock(return_value=bytearray(info))
-    client.write_gatt_char = AsyncMock()
-    client.start_notify = AsyncMock()
-    client.disconnect = AsyncMock()
-    client.services.get_characteristic = MagicMock(
-        side_effect=lambda uuid: SimpleNamespace(uuid=uuid)
-    )
-    mocker.patch(
-        "custom_components.wallecube_ble.wclib.connection.establish_connection",
-        new=AsyncMock(return_value=client),
-    )
-    return client
-
-
-def notify_handler(client, uuid: str):
-    for args in client.start_notify.await_args_list:
-        if args.args[0].uuid == uuid:
-            return args.args[1]
-    raise AssertionError(f"{uuid} was not subscribed")
-
-
-def telemetry_handler(client):
-    return notify_handler(client, TELEMETRY_CHARACTERISTIC_UUID)
-
-
 async def test_connect_and_notifications_update_fields(
-    device: Device, client, mocker: MockerFixture
+    device: Device, establish, client, mocker: MockerFixture
 ):
     # settings reads have their own tests, keep this one to the telemetry path
     refresh = mocker.patch.object(device, "refresh_settings", new=AsyncMock())
     battery_callback = mocker.Mock()
-    device.register_callback(battery_callback, "battery_level")
-    device.with_enabled_packet_diagnostics()
+    device.subscribe("battery_level", battery_callback, throttled=True)
 
-    await device.with_disabled_reconnect().connect()
-    state = await device.wait_until_authenticated_or_error()
+    await device.connect()
     await device._refresh_task
-    await telemetry_handler(client)(
+    await notify_handler(client)(
         None, bytearray(telemetry_frame(status_flags=ON_BATTERY))
     )
 
-    assert state is ConnectionState.AUTHENTICATED
+    assert device.connection_state is ConnectionState.AUTHENTICATED
     refresh.assert_awaited_once()
     # versions come from the info block that keyed the session
     assert device.firmware_version == 19
-    assert device.power_board_firmware_version == 2
+    assert device.power_board_firmware_version == 29
     assert device.battery_level == 87.5
     assert device.remaining_time_discharging == 121
     battery_callback.assert_called_once()
 
-    diagnostics = device.diagnostics.build_diagnostics_dict()
-    assert diagnostics["address"] == "0A:1B:2C:**:**:**"
-    assert diagnostics["session"]["from_advertised_name"] is True
-    assert len(diagnostics["frames_received"]) == 2
-    assert "0a1b2c3d4e50" not in str(diagnostics).lower()
 
-
-async def test_disconnect_cancels_running_settings_refresh(
-    device: Device, client, mocker: MockerFixture
+async def test_bluez_start_notify_reaches_every_subscription(
+    device: Device, establish, client
 ):
-    started = asyncio.Event()
+    await device.with_bluez_start_notify().connect()
+
+    assert client.start_notify.await_count == 2
+    for args in client.start_notify.await_args_list:
+        assert args.kwargs == {"bluez": {"use_start_notify": True}}
+
+
+async def test_disconnect_stops_the_session_tasks(
+    device: Device, establish, client, mocker: MockerFixture
+):
+    # while connected the settings are read, the Wi-Fi status is polled and the
+    # telemetry is watched
+    refreshing = asyncio.Event()
 
     async def slow_refresh():
-        started.set()
+        refreshing.set()
         await asyncio.Event().wait()
 
     mocker.patch.object(device, "refresh_settings", side_effect=slow_refresh)
-
-    await device.with_disabled_reconnect().connect()
-    await started.wait()
-    task = device._refresh_task
-    await device.disconnect()
-
-    assert task is not None
-    assert task.cancelled() or task.cancelling()
-    assert device._refresh_task is None
-    assert device._poll_task is None
-
-
-async def test_polls_wifi_status_while_connected(
-    device: Device, client, mocker: MockerFixture
-):
-    mocker.patch.object(device, "refresh_settings", new=AsyncMock())
     mocker.patch.object(Device, "POLL_INTERVAL", 0)
-    polled = asyncio.Event()
-    mocker.patch.object(device, "poll", side_effect=lambda: polled.set())
-
-    await device.with_disabled_reconnect().connect()
-    await asyncio.wait_for(polled.wait(), 1)
-    task = device._poll_task
-    await device.disconnect()
-
-    assert task is not None
-    assert task.cancelled() or task.cancelling()
-    assert device._poll_task is None
-
-
-async def test_watches_telemetry_while_connected(
-    device: Device, client, mocker: MockerFixture
-):
-    mocker.patch.object(device, "refresh_settings", new=AsyncMock())
     mocker.patch.object(Device, "DATA_TIMEOUT", 0.01)
     stale = asyncio.Event()
-    device.register_state_update_callback(lambda _: stale.set(), "charging")
+    device.subscribe("charging", stale.set)
 
     # no telemetry arrives after connecting
-    await device.with_disabled_reconnect().connect()
-    await asyncio.wait_for(stale.wait(), 1)
-    task = device._data_task
+    await device.connect()
+    await asyncio.wait_for(asyncio.gather(refreshing.wait(), stale.wait()), 1)
+    tasks = asyncio.all_tasks() - {asyncio.current_task()}
     await device.disconnect()
+    await asyncio.sleep(0)
 
     assert not device.data_current
-    assert task is not None
-    assert task.cancelled() or task.cancelling()
-    assert device._data_task is None
+    # the poll asks for the Wi-Fi status, type 0x01 tagged with 0x40 and no payload
+    assert CIPHER.decrypt(client.write_gatt_char.await_args.args[1])[:2] == b"\x41\x00"
+    assert len(tasks) == 3
+    assert all(task.cancelled() for task in tasks)
 
 
 async def test_new_session_replaces_pending_settings_refresh(
-    device: Device, client, mocker: MockerFixture
+    device: Device, establish, mocker: MockerFixture
 ):
     started = asyncio.Event()
 
@@ -541,8 +423,8 @@ async def test_new_session_replaces_pending_settings_refresh(
         await asyncio.Event().wait()
 
     mocker.patch.object(device, "refresh_settings", side_effect=slow_refresh)
-    await device.with_disabled_reconnect().connect()
-    await started.wait()
+    await device.connect()
+    await asyncio.wait_for(started.wait(), 1)
     first = device._refresh_task
 
     device._on_connection_state(ConnectionState.AUTHENTICATED)
@@ -555,37 +437,36 @@ async def test_new_session_replaces_pending_settings_refresh(
 
 
 async def test_diagnostics_do_not_identify_the_device(
-    device: Device, client, mocker: MockerFixture
+    device: Device, establish, client, mocker: MockerFixture
 ):
     mocker.patch.object(device, "refresh_settings", new=AsyncMock())
-    cipher = SessionCipher(derive_session_key(bytes.fromhex("0a1b2c3d4e50")))
-    token = cipher.token.to_bytes(4, "little")
-    info = cipher.encrypt(bytes.fromhex("5100 0301 0200 0300 1300"))
-    adapter = cipher.encrypt(b"\x51" + struct.pack("<5H", 3000, 2100, 12000, 0, 0))
+    token = CIPHER.token.to_bytes(4, "little")
+    info = client.read_gatt_char.return_value
+    adapter = encrypted(b"\x51" + struct.pack("<5H", 3000, 2100, 12000, 0, 0))
     # connected at -60 dBm to "MyHome" with 192.168.1.23, gateway and netmask
     wifi = bytes.fromhex("01c4 c0a80117 c0a80101 ffffff00 06") + b"MyHome"
-    wifi_frame = cipher.encrypt(bytes([0x41, len(wifi), 0x12, 0x34]) + token + wifi)
-    device.with_enabled_packet_diagnostics()
+    wifi_frame = config_frame(0x01, wifi)
 
-    await device.with_disabled_reconnect().connect()
-    client.read_gatt_char.return_value = bytearray(adapter)
+    await device.connect()
+    client.read_gatt_char.return_value = adapter
     await device.read_value(ADAPTER_CHARACTERISTIC_UUID)
     await device.send_command(ADAPTER_CHARACTERISTIC_UUID, b"\x01\x02")
     await notify_handler(client, CONFIG_CHARACTERISTIC_UUID)(None, wifi_frame)
-    await telemetry_handler(client)(None, bytearray(telemetry_frame()))
+    await notify_handler(client)(None, bytearray(telemetry_frame()))
 
     diagnostics = device.diagnostics.build_diagnostics_dict()
     dump = json.dumps(diagnostics).lower()
     written = [bytes(c.args[1]) for c in client.write_gatt_char.await_args_list]
     for ciphertext in (info, adapter, wifi_frame, *written):
-        assert ciphertext.hex() not in dump
+        assert bytes(ciphertext).hex() not in dump
     assert token.hex() not in dump
     assert "myhome" not in dump
     assert b"MyHome".hex() not in dump
     assert "c0a80117" not in dump
     for address_part in ("3d4e50", "3d4e52", "3d:4e", "3d_4e", "4e52", "4e50"):
         assert address_part not in dump
-    assert diagnostics["name"] == "WalleCube-****"
+    assert diagnostics["name"] == "W150-****"
+    assert diagnostics["local_name"] == "Walle-0A1B2C******"
     assert diagnostics["session"] == {"from_advertised_name": True, "info": ANY}
     # decrypted payloads stay readable, the Wi-Fi status keeps connected and signal
     assert [source for _, source, _ in diagnostics["frames_received"]] == [
@@ -595,40 +476,64 @@ async def test_diagnostics_do_not_identify_the_device(
         "F0B1",
     ]
     assert diagnostics["frames_received"][2][2] == "01c4" + "00" * 19
+    assert diagnostics["frames_received"][3][2] == telemetry_frame().hex()
     assert diagnostics["frames_sent"] == [(ANY, "F0B2", "0102")]
 
 
-async def test_diagnostics_mask_addresses_in_errors(
-    device: Device, mocker: MockerFixture
-):
-    mocker.patch(
-        "custom_components.wallecube_ble.wclib.connection.establish_connection",
-        new=AsyncMock(
-            side_effect=BleakError(
-                "Walle-0A1B2C3D4E50 - 0A:1B:2C:3D:4E:52: Failed to connect: "
-                "/org/bluez/hci0/dev_0A_1B_2C_3D_4E_52 not found"
-            )
-        ),
-    )
-    device.with_enabled_packet_diagnostics()
+def test_diagnostics_keep_the_recent_history(device: Device):
+    for _ in range(300):
+        device.listeners.on_data_received("F0B1", b"\x01")
+        device.listeners.on_data_send("F0B2", b"\x02")
+        device.listeners.on_state_change(ConnectionState.CONNECTED)
 
-    await device.with_disabled_reconnect().connect()
+    diagnostics = device.diagnostics.build_diagnostics_dict()
 
-    [(_, error)] = device.diagnostics.build_diagnostics_dict()["errors"]
-    assert error == (
-        "BleakError('Walle-0A1B2C****** - 0A:1B:2C:**:**:**: Failed to connect: "
-        "/org/bluez/hci0/dev_0A_1B_2C_**_**_** not found')"
+    assert len(diagnostics["frames_received"]) == 200
+    assert len(diagnostics["frames_sent"]) == 200
+    assert len(diagnostics["connection_history"]) == 50
+
+
+async def test_logs_do_not_name_the_address(device: Device, establish, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    await device.connect()
+    await device.disconnect()
+
+    assert caplog.records
+    for record in caplog.records:
+        text = f"{record.name} {record.getMessage()}".upper()
+        for hidden in ("3D:4E", "3D_4E", "3D4E"):
+            assert hidden not in text
+
+
+async def test_diagnostics_mask_addresses_in_errors(device: Device, establish):
+    establish.side_effect = BleakError(
+        "Walle-0A1B2C3D4E50 - 0A:1B:2C:3D:4E:52: Failed to connect: "
+        "/org/bluez/hci0/dev_0A_1B_2C_3D_4E_52 not found"
     )
+
+    with pytest.raises(BleakError):
+        await device.connect()
+
+    history = device.diagnostics.build_diagnostics_dict()["connection_history"]
+    assert [{k: v for k, v in entry.items() if k != "time"} for entry in history] == [
+        {"state": "ESTABLISHING_CONNECTION"},
+        {"state": "ERROR_BLEAK"},
+        {
+            "error": "BleakError('Walle-0A1B2C****** - 0A:1B:2C:**:**:**: Failed to "
+            "connect: /org/bluez/hci0/dev_0A_1B_2C_**_**_** not found')"
+        },
+    ]
 
 
 async def test_failing_settings_refresh_does_not_break_the_connection(
-    device: Device, client, mocker: MockerFixture
+    device: Device, establish, mocker: MockerFixture
 ):
     mocker.patch.object(
         device, "refresh_settings", new=AsyncMock(side_effect=RuntimeError("boom"))
     )
 
-    await device.with_disabled_reconnect().connect()
+    await device.connect()
     await device._refresh_task
 
     assert device.connection_state is ConnectionState.AUTHENTICATED

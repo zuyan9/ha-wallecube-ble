@@ -1,13 +1,9 @@
-"""
-Entity behavior that needs Home Assistant installed
-
-Run with the Home Assistant dependencies available, e.g.
-`uv run --with aiohasupervisor --with serialx pytest tests/ha`.
-"""
+"""Entity behavior that needs Home Assistant installed"""
 
 import pytest
 
-pytest.importorskip("homeassistant.components.bluetooth")
+# a Home Assistant that fails to import its dependencies skips these tests too
+pytest.importorskip("homeassistant.components.bluetooth", exc_type=ImportError)
 
 from unittest.mock import MagicMock, PropertyMock
 
@@ -15,29 +11,22 @@ from homeassistant.components.number import NumberMode
 from homeassistant.const import PERCENTAGE, EntityCategory
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble.binary_sensor import WalleCubeBinarySensor
+from custom_components.wallecube_ble.binary_sensor import (
+    BINARY_SENSOR_TYPES,
+    WalleCubeBinarySensor,
+)
 from custom_components.wallecube_ble.event import EVENT_TYPES, WalleCubeEvent
 from custom_components.wallecube_ble.number import WalleCubeNumber
-from custom_components.wallecube_ble.number import _describe as describe_number
 from custom_components.wallecube_ble.select import WalleCubeSelect
-from custom_components.wallecube_ble.select import _describe as describe_select
-from custom_components.wallecube_ble.sensor import WalleCubeSensor
+from custom_components.wallecube_ble.sensor import SENSOR_TYPES, WalleCubeSensor
 from custom_components.wallecube_ble.switch import WalleCubeSwitch
-from custom_components.wallecube_ble.switch import _describe as describe_switch
 from custom_components.wallecube_ble.wclib import controls, get_controls
 from custom_components.wallecube_ble.wclib.devices.w150 import (
     BuzzerMode,
     Device,
     PowerEvent,
 )
-
-
-@pytest.fixture
-def device():
-    adv = MagicMock(local_name="Walle-0A1B2C3D4E50", service_uuids=[])
-    ble_dev = MagicMock(address="0A:1B:2C:3D:4E:52")
-    ble_dev.name = adv.local_name
-    return Device(ble_dev, adv)
+from tests.fakes import telemetry_frame
 
 
 def control(device: Device, control_type: type[controls.ControlType], key: str):
@@ -51,35 +40,25 @@ def publish(device: Device, field_name: str, value) -> None:
 
 def test_entities_are_not_polled(device: Device):
     entities = [
-        WalleCubeSensor(device, "battery_level"),
-        WalleCubeBinarySensor(device, "charging"),
-        WalleCubeSelect(
-            device, describe_select(control(device, controls.select, "buzzer_mode"))
-        ),
-        WalleCubeNumber(
-            device,
-            describe_number(control(device, controls.NumberType, "standby_time")),
-        ),
-        WalleCubeSwitch(
-            device,
-            describe_switch(control(device, controls.switch, "screen_always_on")),
-        ),
-        WalleCubeEvent(device, "power_event"),
+        WalleCubeSensor(device, SENSOR_TYPES["battery_level"]),
+        WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["charging"]),
+        WalleCubeSelect(device, control(device, controls.select, "buzzer_mode")),
+        WalleCubeNumber(device, control(device, controls.NumberType, "standby_time")),
+        WalleCubeSwitch(device, control(device, controls.switch, "screen_always_on")),
+        WalleCubeEvent(device, EVENT_TYPES["power_event"]),
     ]
 
     assert [entity.should_poll for entity in entities] == [False] * len(entities)
 
 
 async def test_value_published_before_subscription_is_not_lost(device: Device):
-    select = WalleCubeSelect(
-        device, describe_select(control(device, controls.select, "buzzer_mode"))
-    )
-    binary_sensor = WalleCubeBinarySensor(device, "charging")
+    select = WalleCubeSelect(device, control(device, controls.select, "buzzer_mode"))
+    binary_sensor = WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["charging"])
 
     # the settings read after connecting can finish before HA adds the entities
     publish(device, "buzzer_mode", BuzzerMode.REPEAT)
     # status flag bit 7 (charging) in an otherwise empty telemetry frame
-    await device.data_parse(b"\x51\x00" + bytes(36) + (1 << 7).to_bytes(2, "little"))
+    await device.data_parse(telemetry_frame(status_flags=1 << 7))
     await select.async_added_to_hass()
     await binary_sensor.async_added_to_hass()
 
@@ -89,7 +68,7 @@ async def test_value_published_before_subscription_is_not_lost(device: Device):
 
 async def test_updates_after_subscription_reach_the_entity(device: Device):
     number = WalleCubeNumber(
-        device, describe_number(control(device, controls.NumberType, "standby_time"))
+        device, control(device, controls.NumberType, "standby_time")
     )
     number.async_write_ha_state = MagicMock()
     await number.async_added_to_hass()
@@ -106,17 +85,17 @@ async def test_telemetry_entities_are_unavailable_while_telemetry_is_stale(
     mocker.patch.object(
         Device, "is_connected", new_callable=PropertyMock, return_value=True
     )
-    level = WalleCubeSensor(device, "battery_level")
-    charging = WalleCubeBinarySensor(device, "charging")
+    level = WalleCubeSensor(device, SENSOR_TYPES["battery_level"])
+    charging = WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["charging"])
     standby = WalleCubeNumber(
-        device, describe_number(control(device, controls.NumberType, "standby_time"))
+        device, control(device, controls.NumberType, "standby_time")
     )
-    event = WalleCubeEvent(device, "power_event")
+    event = WalleCubeEvent(device, EVENT_TYPES["power_event"])
     entities = (level, charging, standby, event)
     for entity in entities:
         entity.async_write_ha_state = MagicMock()
         await entity.async_added_to_hass()
-    await device._on_data(b"\x51\x00" + bytes(38))
+    await device._on_data(telemetry_frame())
     level.async_write_ha_state.reset_mock()
     charging.async_write_ha_state.reset_mock()
 
@@ -127,7 +106,7 @@ async def test_telemetry_entities_are_unavailable_while_telemetry_is_stale(
     level.async_write_ha_state.assert_called_once()
     charging.async_write_ha_state.assert_called_once()
 
-    await device._on_data(b"\x51\x00" + bytes(38))
+    await device._on_data(telemetry_frame())
 
     assert all(entity.available for entity in entities)
     assert level.async_write_ha_state.call_count == 2
@@ -145,7 +124,10 @@ async def test_telemetry_entities_are_unavailable_while_telemetry_is_stale(
 def test_shutdown_signals_are_primary_entities(
     device: Device, key: str, category: EntityCategory | None
 ):
-    assert WalleCubeBinarySensor(device, key).entity_category is category
+    assert (
+        WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES[key]).entity_category
+        is category
+    )
 
 
 def test_power_event_types_match_the_device_events():
@@ -155,21 +137,21 @@ def test_power_event_types_match_the_device_events():
 
 
 async def test_power_event_fires_on_the_event_byte(device: Device):
-    event = WalleCubeEvent(device, "power_event")
+    event = WalleCubeEvent(device, EVENT_TYPES["power_event"])
     event.async_write_ha_state = MagicMock()
     await event.async_added_to_hass()
 
     # event byte 2 in an otherwise empty telemetry frame
-    await device.data_parse(b"\x51\x02" + bytes(38))
-    await device.data_parse(b"\x51\x00" + bytes(38))
+    await device.data_parse(telemetry_frame(event=2))
+    await device.data_parse(telemetry_frame())
 
     assert event.state_attributes["event_type"] == "power_lost"
     event.async_write_ha_state.assert_called_once()
 
 
 async def test_last_power_event_is_not_fired_again_when_added(device: Device):
-    await device.data_parse(b"\x51\x01" + bytes(38))
-    event = WalleCubeEvent(device, "power_event")
+    await device.data_parse(telemetry_frame(event=1))
+    event = WalleCubeEvent(device, EVENT_TYPES["power_event"])
     event.async_write_ha_state = MagicMock()
 
     await event.async_added_to_hass()
@@ -178,29 +160,21 @@ async def test_last_power_event_is_not_fired_again_when_added(device: Device):
     event.async_write_ha_state.assert_not_called()
 
 
-def test_device_info_carries_front_panel_versions(device: Device):
-    device.info_parse(bytes.fromhex("00 0300 1d00 0300 1300") + bytes(6))
-
-    info = WalleCubeSensor(device, "power_board_firmware_version").device_info
-
-    assert info["sw_version"] == "19"
-    assert info["hw_version"] == "3"
-    assert info["model"] == "W150"
-
-
-def test_device_info_names_the_model_the_power_board_reports(device: Device):
+def test_device_info_names_the_model_and_the_front_panel_versions(device: Device):
+    # a W180 power board, hardware 4 and firmware 29, behind front panel 3 and 20
     device.info_parse(bytes.fromhex("00 0400 1d00 0300 1400") + bytes(6))
 
-    info = WalleCubeSensor(device, "battery_level").device_info
+    info = WalleCubeSensor(device, SENSOR_TYPES["battery_level"]).device_info
 
     assert info["model"] == "W180"
     assert info["name"] == "W180-4E52"
+    assert info["sw_version"] == "20"
+    assert info["hw_version"] == "3"
 
 
 def test_brightness_is_a_percentage_slider(device: Device):
     number = WalleCubeNumber(
-        device,
-        describe_number(control(device, controls.NumberType, "screen_brightness")),
+        device, control(device, controls.NumberType, "screen_brightness")
     )
 
     assert number.native_unit_of_measurement == PERCENTAGE
@@ -208,8 +182,64 @@ def test_brightness_is_a_percentage_slider(device: Device):
     assert (number.native_min_value, number.native_max_value) == (0, 80)
 
 
+async def test_removed_entity_is_no_longer_written(device: Device):
+    number = WalleCubeNumber(
+        device, control(device, controls.NumberType, "standby_time")
+    )
+    number.async_write_ha_state = MagicMock()
+    await number.async_added_to_hass()
+
+    # what HA runs when it removes the entity
+    number._call_on_remove_callbacks()
+    publish(device, "standby_time", 120)
+
+    number.async_write_ha_state.assert_not_called()
+
+
+async def test_only_sensors_follow_the_update_period(
+    device: Device, mocker: MockerFixture
+):
+    clock = mocker.patch("custom_components.wallecube_ble.wclib.devicebase.time.time")
+    device.with_update_period(10)
+    level = WalleCubeSensor(device, SENSOR_TYPES["battery_level"])
+    charging = WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["charging"])
+    event = WalleCubeEvent(device, EVENT_TYPES["power_event"])
+    for entity in (level, charging, event):
+        entity.async_write_ha_state = MagicMock()
+        await entity.async_added_to_hass()
+
+    # (time, charging, power event); the battery level changes with every frame and
+    # alone in the one that ends the first seconds, which starts the update period
+    frames = [(1000, 0, 0), (1001, 1, 0), (1007, 1, 0), (1008, 0, 2), (1009, 1, 0)]
+    for i, (at, charging_bit, event_byte) in enumerate(frames):
+        clock.return_value = at
+        await device.data_parse(
+            telemetry_frame(
+                battery_permille=500 + i,
+                status_flags=charging_bit << 7,
+                event=event_byte,
+            )
+        )
+
+    # the sensor holds the changes within the update period, the others do not
+    assert level.async_write_ha_state.call_count == 3
+    assert charging.async_write_ha_state.call_count == 4
+    # the power event lasts one frame, it must not wait for the next period
+    event.async_write_ha_state.assert_called_once()
+
+
+def test_entity_names_fall_back_to_the_key(device: Device):
+    sensor = WalleCubeSensor(device, SENSOR_TYPES["battery_level"])
+    number = WalleCubeNumber(
+        device, control(device, controls.NumberType, "standby_time")
+    )
+
+    assert sensor.translation_key == "battery_level"
+    assert number.translation_key == "standby_time"
+
+
 def test_cell_voltages_share_one_translation(device: Device):
-    sensor = WalleCubeSensor(device, "cell_voltage_2")
+    sensor = WalleCubeSensor(device, SENSOR_TYPES["cell_voltage_2"])
 
     assert sensor.unique_id == f"wc_{device.identifier}_cell_voltage_2"
     assert sensor.translation_key == "cell_voltage"
