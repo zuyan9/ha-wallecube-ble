@@ -343,6 +343,15 @@ class Connection:
             await self._fail(ConnectionState.ERROR_BLEAK, e)
             return
 
+        # the link can drop while subscribing without failing the subscription, e.g.
+        # during the optional one on the configuration channel
+        if not self.is_connected:
+            await self._fail(
+                ConnectionState.ERROR_BLEAK,
+                BleakError("Disconnected while establishing the session"),
+            )
+            return
+
         self._connection_attempt = 0
         self._reconnect_attempt = 0
         self._retry_on_disconnect = self._reconnect

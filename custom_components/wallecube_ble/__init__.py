@@ -166,13 +166,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
             )
     ir.async_delete_issue(hass, DOMAIN, issue_id)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(_update_listener))
-
     def _on_disconnect(exc: Exception | type[Exception] | None):
         hass.config_entries.async_schedule_reload(entry.entry_id)
 
+    # registered before the platforms are set up, otherwise a disconnect meanwhile
+    # is lost and the entry stays loaded on a dead link. The reload waits for this
+    # setup to finish.
     entry.async_on_unload(device.on_disconnect(_on_disconnect))
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_update_listener))
 
     return True
 

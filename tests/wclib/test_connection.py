@@ -342,3 +342,25 @@ async def test_failed_config_subscription_keeps_telemetry(establish, client):
 
     assert conn.state is ConnectionState.AUTHENTICATED
     assert notify_handler(client, TELEMETRY_CHARACTERISTIC_UUID) is not None
+
+
+@pytest.mark.parametrize("subscription_fails", [True, False])
+async def test_disconnect_while_subscribing_fails_the_connection(
+    establish, client, subscription_fails: bool
+):
+    async def start_notify(characteristic, handler, **kwargs):
+        if characteristic.uuid == CONFIG_CHARACTERISTIC_UUID:
+            # bleak reports the dropped link while the subscription is pending
+            client.is_connected = False
+            establish.await_args.kwargs["disconnected_callback"](client)
+            if subscription_fails:
+                raise BleakError("Not connected")
+
+    client.start_notify.side_effect = start_notify
+    conn = make_connection(config_parse=AsyncMock())
+
+    await conn.connect()
+
+    assert conn.state is ConnectionState.ERROR_BLEAK
+    with pytest.raises(BleakError):
+        await conn.wait_until_authenticated_or_error(raise_on_error=True)

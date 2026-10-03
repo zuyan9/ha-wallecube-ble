@@ -13,6 +13,7 @@ from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import homeassistant.helpers.issue_registry as ir
+from bleak.exc import BleakError
 from bleak_retry_connector import MAX_CONNECT_ATTEMPTS
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import SOURCE_BLUETOOTH, ConfigEntry
@@ -23,6 +24,7 @@ from pytest_mock import MockerFixture
 from custom_components.wallecube_ble import async_setup_entry, async_unload_entry
 from custom_components.wallecube_ble.const import DOMAIN
 from custom_components.wallecube_ble.wclib.connection import (
+    CONFIG_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
     TELEMETRY_CHARACTERISTIC_UUID,
     ConnectionState,
@@ -160,3 +162,45 @@ async def test_missing_characteristic_stops_retrying_after_max_attempts(
     with pytest.raises(ConfigEntryNotReady):
         await async_setup_entry(hass, entry)
     assert establish.await_count == MAX_CONNECT_ATTEMPTS + 1
+
+
+def drop_link(establish: AsyncMock, client: MagicMock) -> None:
+    """Report a lost link the way bleak does"""
+    client.is_connected = False
+    establish.await_args.kwargs["disconnected_callback"](client)
+
+
+async def test_disconnect_during_platform_setup_schedules_a_reload(
+    hass, entry, establish
+):
+    client = make_client()
+    establish.return_value = client
+
+    async def forward_entry_setups(*_):
+        # the link drops while the platforms add their entities
+        drop_link(establish, client)
+
+    hass.config_entries.async_forward_entry_setups.side_effect = forward_entry_setups
+
+    assert await async_setup_entry(hass, entry)
+
+    hass.config_entries.async_schedule_reload.assert_called_once_with(entry.entry_id)
+    await async_unload_entry(hass, entry)
+
+
+async def test_disconnect_during_session_setup_retries_setup(hass, entry, establish):
+    client = make_client()
+
+    async def start_notify(characteristic, handler, **kwargs):
+        if characteristic.uuid == CONFIG_CHARACTERISTIC_UUID:
+            drop_link(establish, client)
+            raise BleakError("Not connected")
+
+    client.start_notify.side_effect = start_notify
+    establish.return_value = client
+
+    with pytest.raises(ConfigEntryNotReady) as err:
+        await async_setup_entry(hass, entry)
+
+    assert err.value.translation_key == "could_not_connect"
+    hass.config_entries.async_forward_entry_setups.assert_not_awaited()
