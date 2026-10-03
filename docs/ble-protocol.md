@@ -222,11 +222,10 @@ decoder reads them from offset 24, which holds the cycle count.
 power board keeps it across restarts, saving it every 2 Wh, so up to 2 Wh are lost when
 it restarts. The vendor app divides the raw value by 10⁶ and shows kWh.
 
-**Fault flags**: the power board sets these bits while the condition lasts. Bits 0-7
-clear together once the battery is back in range. On an input over-voltage (bit 10) the
-power board also stops powering the output from the battery; the output over-current
-flag (bit 11) is only reported. The front panel and the cloud ignore the fault flags;
-the vendor app's decoder reads them as a 32-bit value without using it.
+**Fault flags**: the power board sets these bits while the condition lasts, except bit
+10, see below. Bits 0-7 clear together once the battery is back in range. The output
+over-current flag (bit 11) is only reported. The front panel and the cloud ignore the
+fault flags; the vendor app's decoder reads them as a 32-bit value without using it.
 
 | Bit | Mask | Condition |
 | --- | --- | --- |
@@ -238,9 +237,23 @@ the vendor app's decoder reads them as a 32-bit value without using it.
 | 6 | `0x00000040` | battery monitor chip fault |
 | 8 | `0x00000100` | battery temperature above the high limit: 60 °C (W150), 50 °C (W180) |
 | 9 | `0x00000200` | battery temperature below −10 °C |
-| 10 | `0x00000400` | input voltage more than 1.8 V above the adapter voltage setting |
+| 10 | `0x00000400` | output voltage above the adapter voltage setting plus about 1.8 V, rarely set, see below |
 | 11 | `0x00000800` | output current above the output current limit, see [adapter settings](#ups-service) |
 | 16 | `0x00010000` | a request on the power board's USB interface stalled, until it restarts |
+
+**Fault bit 10** comes from a comparator on the output voltage, which follows the input
+while input power is present. The power board sets its threshold when it starts, to
+about 1.8 V above the adapter voltage (1.5 V on power-board firmware 1.21), in steps of
+about 0.44 V. The comparator shares its interrupt with the one for input power, and the
+power board sets the bit only when both trip in the same interrupt. A slowly rising
+input never sets it, and plugging in an adapter at runtime most likely does not either,
+as the output rises after the input. At power-board start both comparators start
+together, so a coincidence is possible there. How often either happens is not measured.
+The power board clears the bit while the output voltage is below the adapter voltage
+setting plus 2 V; for this a new setting counts at once, for the threshold only from the
+next start. On each edge of the comparator, whether or not it sets the bit, the power
+board drives the enable of its battery output (OTG) low when the voltage rises above the
+threshold and high again when it falls below; the effect on the output is not verified.
 
 **Status flags**:
 
@@ -337,9 +350,9 @@ vendor app asks for a restart with the reset hole on the front panel.
 What the values control:
 
 - The adapter voltage is also the output voltage the UPS generates on battery. The
-  output current limit and the input over-voltage limit (1.8 V above it) follow from it
-  as well. The output current limit is 155 W divided by the adapter voltage, at most
-  11.5 A, on the W150 and 185 W divided by it, at most 12.5 A, on the W180.
+  output current limit and the threshold of fault bit 10 (about 1.8 V above it) follow
+  from it as well. The output current limit is 155 W divided by the adapter voltage, at
+  most 11.5 A, on the W150 and 185 W divided by it, at most 12.5 A, on the W180.
 - The stop-charge threshold is the charger's input voltage limit: when the adapter's
   voltage sags to it, the charger reduces the charging current. If it is above the
   voltage the adapter delivers, the battery does not charge; the vendor app recommends
