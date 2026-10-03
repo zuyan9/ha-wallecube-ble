@@ -4,7 +4,6 @@ import logging
 from collections.abc import Callable
 from functools import partial
 
-import homeassistant.helpers.issue_registry as ir
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
@@ -15,7 +14,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from . import wclib
 from .config_flow import ConfLogOptions
@@ -35,7 +34,6 @@ from .const import (
 from .wclib.connection import BleakError, Connection
 from .wclib.exceptions import (
     ConnectionTimeout,
-    MaxConnectionAttemptsReached,
     SessionKeyError,
     UnsupportedBluetoothProtocol,
 )
@@ -55,7 +53,6 @@ type DeviceConfigEntry = ConfigEntry[wclib.DeviceBase]
 _LOGGER = logging.getLogger(__name__)
 
 ConfigEntryNotReady = partial(ConfigEntryNotReady, translation_domain=DOMAIN)
-ConfigEntryError = partial(ConfigEntryError, translation_domain=DOMAIN)
 
 _REAPPEAR_CALLBACKS_KEY = f"{DOMAIN}_reappear_callbacks"
 
@@ -96,7 +93,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
     diag_options = merged_options.get(CONF_DIAGNOSTICS_OPTIONS, {})
     advanced = merged_options.get(CONF_ADVANCED_CONNECTION_OPTIONS, {})
     timeout = advanced.get(CONF_CONNECTION_TIMEOUT, DEFAULT_CONNECTION_TIMEOUT)
-    issue_id = f"{entry.entry_id}_max_connection_attempts"
 
     try:
         await (
@@ -115,7 +111,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
                     bluez_start_notify=advanced.get(CONF_BLUEZ_START_NOTIFY, False),
                 )
             )
-            .connect()
+            # unlimited: HA retries the setup with its own backoff of up to 10 min,
+            # and the UPS can stay unreachable for long, e.g. while the vendor app
+            # holds its only connection or after it shut down at the end of an outage
+            .connect(max_attempts=0)
         )
         state = await device.wait_until_authenticated_or_error(raise_on_error=True)
     except (ConnectionTimeout, BleakError, TimeoutError) as e:
@@ -126,30 +125,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
     except SessionKeyError as e:
         raise ConfigEntryNotReady(translation_key="session_key_failed") from e
     except UnsupportedBluetoothProtocol as e:
-        # retried like a failed connect; the connection keeps its attempt count, so a
-        # characteristic that stays missing ends in MaxConnectionAttemptsReached
+        # retried like a failed connect, a service discovery can come back incomplete
         raise ConfigEntryNotReady(
             translation_key="unsupported_protocol",
             translation_placeholders={"error_msg": str(e)},
-        ) from e
-    except MaxConnectionAttemptsReached as e:
-        await device.disconnect()
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key="max_connection_attempts_reached",
-            translation_placeholders={
-                # the device names its model only once connected
-                "device_name": entry.title,
-                "attempts": str(e.attempts),
-            },
-        )
-        raise ConfigEntryError(
-            translation_key="could_not_connect_no_retry",
-            translation_placeholders={"attempts": str(e.attempts)},
         ) from e
     except Exception as e:
         _LOGGER.exception("Unknown error")
@@ -164,7 +143,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> bo
                 translation_key="failed_after_successful_connection",
                 translation_placeholders={"last_state": state},
             )
-    ir.async_delete_issue(hass, DOMAIN, issue_id)
 
     def _on_disconnect(exc: Exception | type[Exception] | None):
         hass.config_entries.async_schedule_reload(entry.entry_id)

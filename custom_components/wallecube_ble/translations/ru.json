@@ -168,20 +168,11 @@
     "unsupported_protocol": {
       "message": "Устройство не предоставляет ожидаемые характеристики Bluetooth: {error_msg}"
     },
-    "could_not_connect_no_retry": {
-      "message": "Не удалось подключиться к устройству после {attempts} неудачных попыток"
-    },
     "failed_after_successful_connection": {
       "message": "Устройство подключено, но сеанс не установлен, последнее состояние: {last_state}"
     },
     "setting_failed": {
       "message": "Не удалось изменить настройку: {error}"
-    }
-  },
-  "issues": {
-    "max_connection_attempts_reached": {
-      "title": "Не удалось подключиться к {device_name} после {attempts} неудачных попыток",
-      "description": "Не удалось подключиться к {device_name} после {attempts} неудачных попыток. Подробности в журнале.\n\nАвтоматические повторы отключены, чтобы не засорять журнал; интеграцию нужно перезагрузить вручную. Ошибка исчезнет после успешного подключения."
     }
   },
   "entity": {

@@ -168,20 +168,11 @@
     "unsupported_protocol": {
       "message": "Device does not expose the expected Bluetooth characteristics: {error_msg}"
     },
-    "could_not_connect_no_retry": {
-      "message": "Could not connect to device after {attempts} unsuccessful attempts"
-    },
     "failed_after_successful_connection": {
       "message": "Device connected but the session was not established, last state: {last_state}"
     },
     "setting_failed": {
       "message": "Could not change the setting: {error}"
-    }
-  },
-  "issues": {
-    "max_connection_attempts_reached": {
-      "title": "Could not connect to {device_name} after {attempts} unsuccessful attempts",
-      "description": "Failed to connect to {device_name} after {attempts} unsuccessful attempts. Check the logs for more info.\n\nAutomatic retry was disabled to not spam logs, the integration has to be reloaded manually. This error clears after a successful connection."
     }
   },
   "entity": {

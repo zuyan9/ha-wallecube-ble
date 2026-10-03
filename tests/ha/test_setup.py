@@ -12,13 +12,12 @@ pytest.importorskip("homeassistant.components.bluetooth")
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import homeassistant.helpers.issue_registry as ir
 from bleak.exc import BleakError
 from bleak_retry_connector import MAX_CONNECT_ATTEMPTS
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import SOURCE_BLUETOOTH, ConfigEntry
 from homeassistant.const import CONF_ADDRESS
-from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble import async_setup_entry, async_unload_entry
@@ -73,12 +72,6 @@ def discovered_device(mocker: MockerFixture):
     )
 
 
-@pytest.fixture(autouse=True)
-def create_issue(mocker: MockerFixture):
-    mocker.patch.object(ir, "async_delete_issue")
-    return mocker.patch.object(ir, "async_create_issue")
-
-
 @pytest.fixture
 def establish(mocker: MockerFixture):
     return mocker.patch(
@@ -118,7 +111,7 @@ def entry():
     "missing", [INFO_CHARACTERISTIC_UUID, TELEMETRY_CHARACTERISTIC_UUID]
 )
 async def test_missing_characteristic_retries_setup(
-    hass, entry, establish, create_issue, missing: str
+    hass, entry, establish, missing: str
 ):
     client = make_client(missing)
     establish.return_value = client
@@ -128,7 +121,6 @@ async def test_missing_characteristic_retries_setup(
 
     assert err.value.translation_key == "unsupported_protocol"
     client.disconnect.assert_awaited_once()
-    create_issue.assert_not_called()
 
 
 async def test_setup_recovers_once_the_characteristic_appears(hass, entry, establish):
@@ -143,25 +135,60 @@ async def test_setup_recovers_once_the_characteristic_appears(hass, entry, estab
     await async_unload_entry(hass, entry)
 
 
-async def test_missing_characteristic_stops_retrying_after_max_attempts(
-    hass, entry, establish, create_issue
+# the UPS can stay unreachable for long, e.g. while the vendor app holds its only
+# connection, so the setup must never give up
+@pytest.mark.parametrize(
+    ("failure", "translation_key"),
+    [
+        (
+            BleakError("No backend with an available connection slot"),
+            "could_not_connect",
+        ),
+        (INFO_CHARACTERISTIC_UUID, "unsupported_protocol"),
+    ],
+)
+async def test_setup_keeps_retrying_until_the_device_answers(
+    hass, entry, establish, failure: BleakError | str, translation_key: str
 ):
-    establish.return_value = make_client(INFO_CHARACTERISTIC_UUID)
+    failed = failure if isinstance(failure, BleakError) else make_client(failure)
+    attempts = MAX_CONNECT_ATTEMPTS * 2
+    establish.side_effect = [*[failed] * attempts, make_client()]
 
+    for _ in range(attempts):
+        with pytest.raises(ConfigEntryNotReady) as err:
+            await async_setup_entry(hass, entry)
+        assert err.value.translation_key == translation_key
+
+    assert await async_setup_entry(hass, entry)
+    assert establish.await_count == attempts + 1
+    await async_unload_entry(hass, entry)
+
+
+async def test_setup_connects_when_the_device_reappears(
+    hass, entry, establish, mocker: MockerFixture
+):
+    establish.side_effect = BleakError("No backend with an available connection slot")
     for _ in range(MAX_CONNECT_ATTEMPTS):
         with pytest.raises(ConfigEntryNotReady):
             await async_setup_entry(hass, entry)
-    with pytest.raises(ConfigEntryError) as err:
-        await async_setup_entry(hass, entry)
 
-    assert err.value.translation_key == "could_not_connect_no_retry"
-    assert establish.await_count == MAX_CONNECT_ATTEMPTS
-    create_issue.assert_called_once()
-
-    # reloading by hand starts a new round of attempts
-    with pytest.raises(ConfigEntryNotReady):
+    # HA forgets the UPS while it is silent, the setup then waits for it
+    mocker.patch.object(bluetooth, "async_address_present", return_value=False)
+    register_callback = mocker.patch.object(bluetooth, "async_register_callback")
+    with pytest.raises(ConfigEntryNotReady) as err:
         await async_setup_entry(hass, entry)
-    assert establish.await_count == MAX_CONNECT_ATTEMPTS + 1
+    assert err.value.translation_key == "device_not_present"
+
+    on_reappear = register_callback.call_args.args[1]
+    on_reappear(MagicMock(), bluetooth.BluetoothChange.ADVERTISEMENT)
+    hass.config_entries.async_schedule_reload.assert_called_once_with(entry.entry_id)
+
+    # the reload connects, however many setups failed before
+    mocker.patch.object(bluetooth, "async_address_present", return_value=True)
+    establish.side_effect = None
+    establish.return_value = make_client()
+    assert await async_setup_entry(hass, entry)
+    await async_unload_entry(hass, entry)
 
 
 def drop_link(establish: AsyncMock, client: MagicMock) -> None:

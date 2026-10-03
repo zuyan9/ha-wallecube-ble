@@ -1,8 +1,10 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from bleak.exc import BleakError
+from bleak_retry_connector import MAX_CONNECT_ATTEMPTS
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib.connection import (
@@ -364,3 +366,39 @@ async def test_disconnect_while_subscribing_fails_the_connection(
     assert conn.state is ConnectionState.ERROR_BLEAK
     with pytest.raises(BleakError):
         await conn.wait_until_authenticated_or_error(raise_on_error=True)
+
+
+async def test_unlimited_attempts_never_give_up(establish):
+    establish.side_effect = BleakError("No backend with an available connection slot")
+    conn = make_connection()
+
+    for _ in range(MAX_CONNECT_ATTEMPTS * 2):
+        await conn.connect(max_attempts=0)
+        assert conn.state is ConnectionState.ERROR_BLEAK
+
+    assert establish.await_count == MAX_CONNECT_ATTEMPTS * 2
+    # bleak-retry-connector still gets a real count for each connect
+    assert establish.await_args.kwargs["max_attempts"] == MAX_CONNECT_ATTEMPTS
+
+
+async def test_only_the_first_failure_in_a_row_is_a_warning(establish, client, caplog):
+    establish.side_effect = [BleakError("1"), BleakError("2"), client, BleakError("3")]
+    conn = make_connection()
+    caplog.set_level(logging.DEBUG)
+
+    await conn.connect(max_attempts=0)
+    await conn.connect(max_attempts=0)
+    await conn.connect(max_attempts=0)
+    await conn.disconnect()
+    await conn.connect(max_attempts=0)
+
+    failures = [
+        (r.levelno, r.getMessage())
+        for r in caplog.records
+        if r.getMessage().startswith("Connection failed")
+    ]
+    assert failures == [
+        (logging.WARNING, "Connection failed: 1"),
+        (logging.DEBUG, "Connection failed: 2"),
+        (logging.WARNING, "Connection failed: 3"),
+    ]

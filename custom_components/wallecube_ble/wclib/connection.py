@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import logging
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
@@ -191,6 +192,7 @@ class Connection:
         self._reconnect_task: asyncio.Task | None = None
         self._connection_attempt = 0
         self._reconnect_attempt = 0
+        self._failure_logged = False
         self._tasks: set[asyncio.Task] = set()
 
         self._state_changed = asyncio.Event()
@@ -354,6 +356,7 @@ class Connection:
 
         self._connection_attempt = 0
         self._reconnect_attempt = 0
+        self._failure_logged = False
         self._retry_on_disconnect = self._reconnect
         self._set_state(ConnectionState.AUTHENTICATED)
         self._logger.info("Session established, receiving telemetry")
@@ -692,7 +695,11 @@ class Connection:
         return self._client, self._cipher
 
     async def _fail(self, state: ConnectionState, exc: Exception) -> None:
-        self._logger.error("Connection failed: %s", exc)
+        # callers retry a failed connect, with max_attempts=0 indefinitely, so only
+        # the first failure in a row is worth a warning
+        level = logging.DEBUG if self._failure_logged else logging.WARNING
+        self._failure_logged = True
+        self._logger.log(level, "Connection failed: %s", exc)
         self._set_state(state, exc)
         client, self._client = self._client, None
         if client is not None and client.is_connected:

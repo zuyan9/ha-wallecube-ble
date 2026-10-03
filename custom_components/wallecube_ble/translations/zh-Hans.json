@@ -168,20 +168,11 @@
     "unsupported_protocol": {
       "message": "设备未提供预期的蓝牙特征：{error_msg}"
     },
-    "could_not_connect_no_retry": {
-      "message": "尝试 {attempts} 次后仍无法连接设备"
-    },
     "failed_after_successful_connection": {
       "message": "设备已连接但未建立会话，最后状态：{last_state}"
     },
     "setting_failed": {
       "message": "无法更改设置：{error}"
-    }
-  },
-  "issues": {
-    "max_connection_attempts_reached": {
-      "title": "尝试 {attempts} 次后仍无法连接 {device_name}",
-      "description": "尝试 {attempts} 次后仍无法连接 {device_name}，详情请查看日志。\n\n为避免日志刷屏，已停用自动重试，需要手动重新加载集成。连接成功后此错误会自动清除。"
     }
   },
   "entity": {
