@@ -16,6 +16,7 @@ from ..connection import (
     STANDBY_CHARACTERISTIC_UUID,
     TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
     UPS_SERVICE_UUID,
+    config_source,
 )
 from ..devicebase import DeviceBase
 from ..encryption import LOCAL_NAME_PREFIX
@@ -312,6 +313,13 @@ class Device(DeviceBase, RawDataProps):
             if not reply.done():
                 reply.set_result(None)
         return True
+
+    def redact_payload(self, source: str, payload: bytes) -> bytes:
+        # the Wi-Fi status names the network and its addresses; only whether the UPS
+        # is connected and the signal strength are kept, and the length
+        if source == config_source(_GET_WIFI_STATUS):
+            return payload[:2] + bytes(len(payload[2:]))
+        return payload
 
     def _parse_wifi_status(self, payload: bytes) -> bool:
         status = WifiStatus.from_bytes(payload)

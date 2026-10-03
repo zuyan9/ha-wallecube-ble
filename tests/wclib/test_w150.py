@@ -1,13 +1,17 @@
 import asyncio
+import json
 import struct
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
+from bleak.exc import BleakError
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.wclib import NewDevice
 from custom_components.wallecube_ble.wclib.connection import (
+    ADAPTER_CHARACTERISTIC_UUID,
+    CONFIG_CHARACTERISTIC_UUID,
     TELEMETRY_CHARACTERISTIC_UUID,
     UPS_SERVICE_UUID,
     ConnectionState,
@@ -424,11 +428,15 @@ def client(mocker: MockerFixture):
     return client
 
 
-def telemetry_handler(client):
+def notify_handler(client, uuid: str):
     for args in client.start_notify.await_args_list:
-        if args.args[0].uuid == TELEMETRY_CHARACTERISTIC_UUID:
+        if args.args[0].uuid == uuid:
             return args.args[1]
-    raise AssertionError("telemetry was not subscribed")
+    raise AssertionError(f"{uuid} was not subscribed")
+
+
+def telemetry_handler(client):
+    return notify_handler(client, TELEMETRY_CHARACTERISTIC_UUID)
 
 
 async def test_connect_and_notifications_update_fields(
@@ -544,6 +552,73 @@ async def test_new_session_replaces_pending_settings_refresh(
     assert first.cancelled()
     assert device._refresh_task is not first
     await device.disconnect()
+
+
+async def test_diagnostics_do_not_identify_the_device(
+    device: Device, client, mocker: MockerFixture
+):
+    mocker.patch.object(device, "refresh_settings", new=AsyncMock())
+    cipher = SessionCipher(derive_session_key(bytes.fromhex("0a1b2c3d4e50")))
+    token = cipher.token.to_bytes(4, "little")
+    info = cipher.encrypt(bytes.fromhex("5100 0301 0200 0300 1300"))
+    adapter = cipher.encrypt(b"\x51" + struct.pack("<5H", 3000, 2100, 12000, 0, 0))
+    # connected at -60 dBm to "MyHome" with 192.168.1.23, gateway and netmask
+    wifi = bytes.fromhex("01c4 c0a80117 c0a80101 ffffff00 06") + b"MyHome"
+    wifi_frame = cipher.encrypt(bytes([0x41, len(wifi), 0x12, 0x34]) + token + wifi)
+    device.with_enabled_packet_diagnostics()
+
+    await device.with_disabled_reconnect().connect()
+    client.read_gatt_char.return_value = bytearray(adapter)
+    await device.read_value(ADAPTER_CHARACTERISTIC_UUID)
+    await device.send_command(ADAPTER_CHARACTERISTIC_UUID, b"\x01\x02")
+    await notify_handler(client, CONFIG_CHARACTERISTIC_UUID)(None, wifi_frame)
+    await telemetry_handler(client)(None, bytearray(telemetry_frame()))
+
+    diagnostics = device.diagnostics.build_diagnostics_dict()
+    dump = json.dumps(diagnostics).lower()
+    written = [bytes(c.args[1]) for c in client.write_gatt_char.await_args_list]
+    for ciphertext in (info, adapter, wifi_frame, *written):
+        assert ciphertext.hex() not in dump
+    assert token.hex() not in dump
+    assert "myhome" not in dump
+    assert b"MyHome".hex() not in dump
+    assert "c0a80117" not in dump
+    for address_part in ("3d4e50", "3d4e52", "3d:4e", "3d_4e", "4e52", "4e50"):
+        assert address_part not in dump
+    assert diagnostics["name"] == "WalleCube-****"
+    assert diagnostics["session"] == {"from_advertised_name": True, "info": ANY}
+    # decrypted payloads stay readable, the Wi-Fi status keeps connected and signal
+    assert [source for _, source, _ in diagnostics["frames_received"]] == [
+        "F0BF",
+        "F0B2",
+        "F0C1/01",
+        "F0B1",
+    ]
+    assert diagnostics["frames_received"][2][2] == "01c4" + "00" * 19
+    assert diagnostics["frames_sent"] == [(ANY, "F0B2", "0102")]
+
+
+async def test_diagnostics_mask_addresses_in_errors(
+    device: Device, mocker: MockerFixture
+):
+    mocker.patch(
+        "custom_components.wallecube_ble.wclib.connection.establish_connection",
+        new=AsyncMock(
+            side_effect=BleakError(
+                "Walle-0A1B2C3D4E50 - 0A:1B:2C:3D:4E:52: Failed to connect: "
+                "/org/bluez/hci0/dev_0A_1B_2C_3D_4E_52 not found"
+            )
+        ),
+    )
+    device.with_enabled_packet_diagnostics()
+
+    await device.with_disabled_reconnect().connect()
+
+    [(_, error)] = device.diagnostics.build_diagnostics_dict()["errors"]
+    assert error == (
+        "BleakError('Walle-0A1B2C****** - 0A:1B:2C:**:**:**: Failed to connect: "
+        "/org/bluez/hci0/dev_0A_1B_2C_**_**_** not found')"
+    )
 
 
 async def test_failing_settings_refresh_does_not_break_the_connection(

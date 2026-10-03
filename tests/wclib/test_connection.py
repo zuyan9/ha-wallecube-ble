@@ -1,6 +1,6 @@
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from bleak.exc import BleakError
@@ -140,10 +140,56 @@ async def test_telemetry_notifications_are_forwarded(establish, client):
     await handler(None, bytearray(b"\x51\x00" + bytes(38)))
 
     data_parse.assert_awaited_once_with(b"\x51\x00" + bytes(38))
-    assert received.call_args.args == (
-        b"\x51\x00" + bytes(38),
-        ConnectionState.AUTHENTICATED,
+    assert received.call_args.args == ("F0B1", b"\x51\x00" + bytes(38))
+
+
+async def test_data_listeners_get_decrypted_payloads_only(establish, client):
+    cipher = SessionCipher(derive_session_key(BASE_MAC))
+    conn = make_connection(config_parse=AsyncMock(return_value=True))
+    received = MagicMock()
+    sent = MagicMock()
+    conn.on_data_received(received)
+    conn.on_data_send(sent)
+    await conn.connect()
+
+    client.read_gatt_char.return_value = bytearray(cipher.encrypt(b"\x51\x01"))
+    await conn.read_value(ADAPTER_CHARACTERISTIC_UUID)
+    await conn.send_command(ADAPTER_CHARACTERISTIC_UUID, b"\x02")
+    await conn.send_config(0x0C)
+    handler = notify_handler(client, CONFIG_CHARACTERISTIC_UUID)
+    await handler(None, bytearray(config_ciphertext(0x0C, b"\x2c\x01", cipher.token)))
+
+    # nothing encrypted and no session token, either would let anyone test guessed MAC
+    # addresses
+    assert received.call_args_list == [
+        call("F0BF", conn.info),
+        call("F0B2", b"\x01" + bytes(14)),
+        call("F0C1/0C", b"\x2c\x01"),
+    ]
+    assert sent.call_args_list == [call("F0B2", b"\x02"), call("F0C1/0C", b"")]
+
+
+async def test_failed_session_passes_on_no_data(establish, client):
+    client.read_gatt_char.return_value = bytearray(
+        info_ciphertext(bytes.fromhex("aabbccddeeff"))
     )
+    conn = make_connection()
+    received = MagicMock()
+    conn.on_data_received(received)
+
+    await conn.connect()
+
+    assert conn.state is ConnectionState.ERROR_AUTH_FAILED
+    received.assert_not_called()
+
+
+async def test_connection_messages_do_not_name_the_factory_mac(establish):
+    conn = make_connection()
+
+    await conn.connect()
+
+    # bleak-retry-connector puts this name into its log lines and error messages
+    assert establish.await_args.args[2] == "Walle-0A1B2C******"
 
 
 async def test_send_command_writes_authenticated_frame(establish, client):

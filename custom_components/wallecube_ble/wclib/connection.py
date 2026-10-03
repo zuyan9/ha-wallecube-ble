@@ -28,7 +28,7 @@ from .exceptions import (
     UnsupportedBluetoothProtocol,
 )
 from .listeners import ListenerGroup, ListenerRegistry
-from .logging_util import ConnectionLogger, LogOptions
+from .logging_util import ConnectionLogger, LogOptions, mask_address, mask_local_name
 
 MAX_RECONNECT_ATTEMPTS = 2
 MAX_ERRORS_BEFORE_RECONNECT = 5
@@ -38,6 +38,16 @@ _CIPHER_BLOCK_SIZE = 16
 
 def _uuid16(value: int) -> str:
     return f"0000{value:04x}-0000-1000-8000-00805f9b34fb"
+
+
+def _source(uuid: str) -> str:
+    # the 16-bit form, e.g. F0B2, as the docs name the characteristics
+    return uuid[4:8].upper()
+
+
+def config_source(message_type: int) -> str:
+    """Name of a configuration message in the data passed to data listeners"""
+    return f"F0C1/{message_type:02X}"
 
 
 UPS_SERVICE_UUID = _uuid16(0xF0A1)
@@ -137,8 +147,10 @@ _TERMINAL_STATES = frozenset(
 
 type DisconnectListener = Callable[[Exception | type[Exception] | None], None]
 type ConnectionStateListener = Callable[[ConnectionState], None]
-type DataReceivedListener = Callable[[bytes, ConnectionState], None]
-type DataSendListener = Callable[[bytes], None]
+# called with the characteristic or configuration message, see `config_source`, and the
+# decrypted payload without session header; encrypted frames are never passed on
+type DataReceivedListener = Callable[[str, bytes], None]
+type DataSendListener = Callable[[str, bytes], None]
 type DataParser = Callable[[bytes], Awaitable[bool]]
 type ConfigParser = Callable[[packet.ConfigMessage], Awaitable[bool]]
 
@@ -304,7 +316,8 @@ class Connection:
             self._client = await establish_connection(
                 BleakClient,
                 self._ble_dev,
-                self._ble_dev.name or self._address,
+                # only used in messages, which would otherwise carry the factory MAC
+                mask_local_name(self._ble_dev.name) or mask_address(self._address),
                 disconnected_callback=self.disconnected,
                 ble_device_callback=lambda: self._ble_dev,
                 # 0 means unlimited at connection level, but bleak needs a real count
@@ -461,12 +474,13 @@ class Connection:
         """Read an encrypted characteristic and return its decrypted payload"""
         client, cipher = self._require_session()
         data = bytes(await client.read_gatt_char(self._characteristic(characteristic)))
-        self._listeners.on_data_received(data, self._connection_state)
         plaintext = cipher.decrypt(data)
         self._logger.log_filtered(
             LogOptions.DECRYPTED_PAYLOADS, "Read %s: %r", characteristic, plaintext
         )
-        return packet.decode_response(plaintext)
+        payload = packet.decode_response(plaintext)
+        self._listeners.on_data_received(_source(characteristic), payload)
+        return payload
 
     async def send_command(self, characteristic: str, payload: bytes = b"") -> None:
         """Encrypt a command frame and write it to a UPS characteristic"""
@@ -475,7 +489,7 @@ class Connection:
         self._logger.log_filtered(
             LogOptions.DECRYPTED_PAYLOADS, "Write %s: %r", characteristic, payload
         )
-        self._listeners.on_data_send(frame)
+        self._listeners.on_data_send(_source(characteristic), payload)
         await client.write_gatt_char(
             self._characteristic(characteristic), frame, response=True
         )
@@ -499,8 +513,9 @@ class Connection:
         result: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
 
         def on_result(_: BleakGATTCharacteristic, data: bytearray) -> None:
+            # the result is not encrypted
             frame = bytes(data)
-            self._listeners.on_data_received(frame, self._connection_state)
+            self._listeners.on_data_received(f"{_source(characteristic)} result", frame)
             if not result.done():
                 result.set_result(frame)
 
@@ -530,7 +545,7 @@ class Connection:
             message_type,
             payload,
         )
-        self._listeners.on_data_send(frame)
+        self._listeners.on_data_send(config_source(message_type), payload)
         await client.write_gatt_char(
             self._characteristic(CONFIG_CHARACTERISTIC_UUID), frame, response=True
         )
@@ -559,12 +574,13 @@ class Connection:
         self._set_state(ConnectionState.ESTABLISHING_SESSION)
         assert self._client is not None
 
+        # passed on to data listeners only once decrypted: anyone could test guessed
+        # MAC addresses against the encrypted sample
         sample = bytes(
             await self._client.read_gatt_char(
                 self._characteristic(INFO_CHARACTERISTIC_UUID)
             )
         )
-        self._listeners.on_data_received(sample, self._connection_state)
 
         address = int(self._address.replace(":", ""), 16)
         for base_mac in candidate_base_macs(self._address, self._base_mac_hint):
@@ -579,6 +595,9 @@ class Connection:
                 self._base_mac_offset = int.from_bytes(base_mac) - address
                 self._base_mac_from_name = base_mac == self._base_mac_hint
                 self._info = packet.decode_response(plaintext)
+                self._listeners.on_data_received(
+                    _source(INFO_CHARACTERISTIC_UUID), self._info
+                )
                 self._set_state(ConnectionState.SESSION_ESTABLISHED)
                 self._logger.log_filtered(
                     LogOptions.CONNECTION_DEBUG,
@@ -619,8 +638,9 @@ class Connection:
             self._logger.warning("Could not subscribe to configuration messages: %s", e)
 
     async def _on_telemetry(self, _: BleakGATTCharacteristic, data: bytearray) -> None:
+        # telemetry is not encrypted
         frame = bytes(data)
-        self._listeners.on_data_received(frame, self._connection_state)
+        self._listeners.on_data_received(_source(TELEMETRY_CHARACTERISTIC_UUID), frame)
         self._logger.log_filtered(LogOptions.PACKETS, "Telemetry frame: %r", frame)
 
         try:
@@ -637,13 +657,13 @@ class Connection:
 
     async def _on_config(self, _: BleakGATTCharacteristic, data: bytearray) -> None:
         frame = bytes(data)
-        self._listeners.on_data_received(frame, self._connection_state)
         if self._cipher is None or self._config_parse is None:
             return
 
         # a notification longer than the ATT MTU allows arrives cut off and cannot be
         # decrypted, e.g. the Wi-Fi status on a link that kept the default MTU
         if len(frame) % _CIPHER_BLOCK_SIZE:
+            self._listeners.on_data_received(f"F0C1 truncated to {len(frame)}", b"")
             if not self._warned_truncated_config:
                 self._warned_truncated_config = True
                 self._logger.warning(
@@ -657,15 +677,25 @@ class Connection:
             plaintext = self._cipher.decrypt(frame)
             message = packet.ConfigMessage.from_bytes(plaintext)
         except PacketParseError as e:
+            self._listeners.on_data_received("F0C1 undecodable", b"")
             self._logger.warning("Could not decode configuration message: %s", e)
             return
 
-        self._logger.log_filtered(
-            LogOptions.DECRYPTED_PAYLOADS, "Config message: %r", plaintext
-        )
         if message.token != self._cipher.token:
+            self._listeners.on_data_received("F0C1 foreign token", b"")
             self._logger.warning("Ignoring configuration message with foreign token")
             return
+
+        # the token is left out, it would let anyone test guessed MAC addresses
+        self._logger.log_filtered(
+            LogOptions.DECRYPTED_PAYLOADS,
+            "Config message 0x%02x: %r",
+            message.message_type,
+            message.payload,
+        )
+        self._listeners.on_data_received(
+            config_source(message.message_type), message.payload
+        )
 
         try:
             await self._config_parse(message)

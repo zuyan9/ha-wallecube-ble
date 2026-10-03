@@ -117,7 +117,7 @@
               "collect_packets_amount": "Number of packets to store"
             },
             "data_description": {
-              "collect_packets": "Store raw frames exchanged with the device in the diagnostics download - wait a minute after enabling before downloading diagnostics and turn it off afterwards. Device addresses are masked."
+              "collect_packets": "Store the data exchanged with the device in the diagnostics download - wait a minute after enabling before downloading diagnostics and turn it off afterwards. The download shows only the first half of the device's addresses and leaves out the Wi-Fi network name and IP addresses."
             }
           },
           "log_options": {

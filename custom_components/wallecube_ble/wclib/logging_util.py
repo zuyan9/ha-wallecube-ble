@@ -45,11 +45,11 @@ type MaskFunc = Callable[[str], str | None]
 
 
 def mask_address(address: str) -> str:
-    """Keep the vendor part of a BLE address and hide the device-specific part"""
-    delimiter = ":" if ":" in address else ""
+    """Keep the vendor part of a MAC address and hide the device-specific part"""
     octets = re.findall(r"[0-9A-Fa-f]{2}", address)
     if len(octets) != 6:
         return "*" * len(address)
+    delimiter = address[2] if len(address) == 17 else ""
     return delimiter.join([*octets[:3], "**", "**", "**"])
 
 
@@ -64,19 +64,22 @@ def mask_local_name(local_name: str | None) -> str | None:
 
 
 def _address_masker(address: str) -> MaskFunc:
+    # also the forms with "_" or "-" between the octets, e.g. in BlueZ object paths
     octets = re.findall(r"[0-9A-Fa-f]{2}", address)
-    patterns = [
-        re.compile(":".join(octets), re.IGNORECASE),
-        re.compile("".join(octets), re.IGNORECASE),
-    ]
+    pattern = re.compile("[:_-]?".join(octets), re.IGNORECASE)
 
     def _mask(message: str) -> str | None:
-        masked = message
-        for pattern in patterns:
-            masked = pattern.sub(lambda m: mask_address(m.group(0)), masked)
+        masked = pattern.sub(lambda m: mask_address(m.group(0)), message)
         return masked if masked != message else None
 
     return _mask
+
+
+def mask_identifiers(text: str, address: str, base_mac: bytes | None) -> str:
+    """Hide the device-specific part of a device's addresses in a text"""
+    for mask in _identity_maskers(address, base_mac):
+        text = mask(text) or text
+    return text
 
 
 class SensitiveMaskingFilter(logging.Filter):
@@ -204,15 +207,25 @@ class ConnectionLog:
 
 
 class DeviceDiagnosticsCollector:
-    """Collects raw frames, errors and connection events for diagnostics"""
+    """
+    Collects exchanged data, errors and connection events for diagnostics
+
+    Nothing it keeps identifies the device: payloads are stored decrypted, without
+    the session token and redacted by the device, and addresses are masked. Encrypted
+    frames are never stored, they would let anyone recover the device's MAC address
+    and with it the session key.
+    """
 
     def __init__(self, device: "DeviceBase", buffer_size: int = 100):
         self._device = device
         self._enabled = False
         self._start = time.monotonic()
 
-        self._frames_received: deque[tuple[float, bytes]] = deque(maxlen=buffer_size)
-        self._frames_sent: deque[tuple[float, bytes]] = deque(maxlen=buffer_size)
+        # time, source and payload, see `connection.DataReceivedListener`
+        self._frames_received: deque[tuple[float, str, bytes]] = deque(
+            maxlen=buffer_size
+        )
+        self._frames_sent: deque[tuple[float, str, bytes]] = deque(maxlen=buffer_size)
         self._errors: deque[tuple[float, str]] = deque(maxlen=buffer_size)
         self._connect_times: deque[float] = deque(maxlen=buffer_size)
         self._disconnect_times: deque[float] = deque(maxlen=buffer_size)
@@ -262,14 +275,17 @@ class DeviceDiagnosticsCollector:
         return len(self._frames_received)
 
     def add_error(self, message: str):
-        self._errors.append((self._now, message))
+        device = self._device
+        self._errors.append(
+            (self._now, mask_identifiers(message, device.address, device.base_mac_hint))
+        )
 
     def build_diagnostics_dict(self) -> dict[str, Any]:
         """Assemble diagnostics with device identifiers masked"""
         device = self._device
         result: dict[str, Any] = {
             "device": device.device,
-            "name": device.name,
+            "name": _mask_name(device.name, device.identifier),
             "address": mask_address(device.address),
             "connection_state": device.connection_state,
             "connection_state_history": list(device.connection_log.history),
@@ -277,8 +293,14 @@ class DeviceDiagnosticsCollector:
         }
         if self._enabled:
             result |= {
-                "frames_received": [(t, f.hex()) for t, f in self._frames_received],
-                "frames_sent": [(t, f.hex()) for t, f in self._frames_sent],
+                "frames_received": [
+                    (t, source, payload.hex())
+                    for t, source, payload in self._frames_received
+                ],
+                "frames_sent": [
+                    (t, target, payload.hex())
+                    for t, target, payload in self._frames_sent
+                ],
                 "errors": list(self._errors),
                 "connect_times": list(self._connect_times),
                 "disconnect_times": list(self._disconnect_times),
@@ -298,11 +320,13 @@ class DeviceDiagnosticsCollector:
         if exc is not None:
             self.add_error(repr(exc))
 
-    def _on_data_received(self, data: bytes, state: "ConnectionState"):
-        self._frames_received.append((self._now, bytes(data)))
+    def _on_data_received(self, source: str, payload: bytes):
+        payload = self._device.redact_payload(source, bytes(payload))
+        self._frames_received.append((self._now, source, payload))
 
-    def _on_data_send(self, data: bytes):
-        self._frames_sent.append((self._now, bytes(data)))
+    def _on_data_send(self, target: str, payload: bytes):
+        payload = self._device.redact_payload(target, bytes(payload))
+        self._frames_sent.append((self._now, target, payload))
 
     def _clear_buffers(self):
         self._frames_received.clear()
@@ -310,6 +334,14 @@ class DeviceDiagnosticsCollector:
         self._errors.clear()
         self._connect_times.clear()
         self._disconnect_times.clear()
+
+
+def _mask_name(name: str, identifier: str) -> str:
+    # the default name ends with the last four digits of the address
+    suffix = identifier[-4:]
+    if name.upper().endswith(suffix):
+        return name[: -len(suffix)] + "*" * len(suffix)
+    return name
 
 
 class _LazyHex:

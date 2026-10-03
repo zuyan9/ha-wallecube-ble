@@ -163,7 +163,6 @@ class DeviceBase(abc.ABC):
             return None
         return {
             "from_advertised_name": self._conn.base_mac_from_name,
-            "base_mac_offset": self._conn.base_mac_offset,
             "info": self._conn.info.hex(),
         }
 
@@ -229,6 +228,17 @@ class DeviceBase(abc.ABC):
 
     def info_parse(self, info: bytes) -> None:
         """Parse the info block read while establishing the session"""
+
+    def redact_payload(self, source: str, payload: bytes) -> bytes:
+        """
+        Remove personal data from an exchanged payload before diagnostics store it
+
+        Parameters
+        ----------
+        source
+            Characteristic or configuration message, see `connection.config_source`
+        """
+        return payload
 
     async def refresh_settings(self) -> None:
         """Read the device settings, called after every successful connection"""

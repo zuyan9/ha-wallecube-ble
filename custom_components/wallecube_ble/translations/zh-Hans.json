@@ -117,7 +117,7 @@
               "collect_packets_amount": "保存的数据包数量"
             },
             "data_description": {
-              "collect_packets": "在诊断下载中保存与设备交换的原始帧。启用后请等待一分钟再下载诊断信息，之后请关闭此选项。设备地址会被隐藏。"
+              "collect_packets": "在诊断下载中保存与设备交换的数据。启用后请等待一分钟再下载诊断信息，之后请关闭此选项。下载中只显示设备地址的前半部分，不含 Wi-Fi 网络名称和 IP 地址。"
             }
           },
           "log_options": {

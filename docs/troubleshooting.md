@@ -35,10 +35,10 @@ To report wrong or missing values or connection problems:
 3. Download the diagnostics from the device page and attach the file to your issue.
 4. Turn packet collection off again.
 
-The download masks the device's address, but in its current form the frames it stores
-still allow working out the UPS's MAC address, and with it decrypting the UPS's Wi-Fi
-status, including the network name and IP address. Consider that before you attach it to
-a public issue.
+The download shows only the first half of the UPS's addresses, e.g. `0A:1B:2C:**:**:**`.
+It stores the exchanged data decrypted, but without the session key material and without
+the Wi-Fi network name and IP addresses, so nothing in it reveals the rest of the UPS's
+address.
 
 ## Logs
 
