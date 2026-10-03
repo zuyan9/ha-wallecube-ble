@@ -68,8 +68,9 @@ _BINARY_SENSORS: Final[dict[str, BinarySensorEntityDescription]] = {
     "input_power_ok": power(),
     "charging": battery_charging(),
     "discharging": _make_desc(None),
-    "overload": problem(entity_category=EntityCategory.DIAGNOSTIC),
-    "shutdown_imminent": problem(entity_category=EntityCategory.DIAGNOSTIC),
+    # primary, they decide when to shut equipment down
+    "overload": problem(),
+    "shutdown_imminent": problem(),
     "battery_fault": problem(entity_category=EntityCategory.DIAGNOSTIC),
     "over_temperature": _make_desc(
         BinarySensorDeviceClass.HEAT, entity_category=EntityCategory.DIAGNOSTIC

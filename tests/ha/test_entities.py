@@ -12,7 +12,7 @@ pytest.importorskip("homeassistant.components.bluetooth")
 from unittest.mock import MagicMock, PropertyMock
 
 from homeassistant.components.number import NumberMode
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, EntityCategory
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.binary_sensor import WalleCubeBinarySensor
@@ -131,6 +131,21 @@ async def test_telemetry_entities_are_unavailable_while_telemetry_is_stale(
 
     assert all(entity.available for entity in entities)
     assert level.async_write_ha_state.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("key", "category"),
+    [
+        ("shutdown_imminent", None),
+        ("overload", None),
+        ("battery_fault", EntityCategory.DIAGNOSTIC),
+        ("input_over_voltage", EntityCategory.DIAGNOSTIC),
+    ],
+)
+def test_shutdown_signals_are_primary_entities(
+    device: Device, key: str, category: EntityCategory | None
+):
+    assert WalleCubeBinarySensor(device, key).entity_category is category
 
 
 def test_power_event_types_match_the_device_events():

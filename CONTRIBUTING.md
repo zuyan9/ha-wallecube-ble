@@ -143,6 +143,9 @@ custom_components/wallecube_ble/
     ├── controls.py        # Setting declarations for the control platforms
     └── encryption.py      # Session key derivation and cipher
 docs/
+├── entities.md            # What each entity means
+├── shutdown.md            # Shutting down a NAS or computer
+├── troubleshooting.md     # Vendor app, availability, diagnostics, logs, security
 └── ble-protocol.md        # Protocol reference
 tests/
 ├── wclib/                 # Library-level tests (no Home Assistant)

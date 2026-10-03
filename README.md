@@ -14,7 +14,7 @@
 No cloud account • No internet connection required • Real-time status updates
 
 [Supported Devices](#supported-devices) • [Installation](#installation) •
-[Development](#development)
+[Documentation](#documentation) • [Development](#development)
 
 </div>
 
@@ -25,12 +25,17 @@ No cloud account • No internet connection required • Real-time status update
 This integration connects Home Assistant directly to WalleCube DC UPS units over
 **Bluetooth LE**, allowing you to:
 
-- **Monitor** battery level, output voltage, current and power, and remaining runtime
-- **Automate** on power outages, e.g. shut down a NAS when the UPS runs on battery
-- **Operate** independently of the vendor app and cloud
+- **Monitor** the battery, the input and output power and the UPS's status
+- **Automate** on power outages, e.g. notify you or shut down equipment
+- **Configure** the settings of the vendor app's advanced configuration page
 
-The encrypted session is established locally from data the device advertises, so no
-pairing with the vendor app or account is needed.
+No pairing, vendor account or internet connection is needed, see the
+[security note](docs/troubleshooting.md#security).
+
+> [!TIP]
+> To shut down a NAS or server on a power outage, connect it to the UPS's USB port: the
+> UPS is a standard USB UPS that NAS systems support. See
+> [Shutting down a NAS or computer](docs/shutdown.md).
 
 ---
 
@@ -64,71 +69,28 @@ pairing with the vendor app or account is needed.
 | Wi-Fi Network                     |                     |             |                              |
 | IP Address                        |                     |             |                              |
 
-> **📝 Note:** Discharge Time Remaining is only reported while the output runs on battery.
-> Like the UPS display, it counts down to an empty battery, but the UPS turns its output
-> off earlier, when the battery reaches the reserve it keeps. For a shutdown automation,
-> use Shutdown Imminent or Battery Level instead.
-
-Battery Current is positive while the battery charges. The UPS estimates DC Input
-Current from the output current and the charging power instead of measuring it. On
-battery, the UPS turns its output off when the charge falls to its reserve, 18 % by
-default. With power-board firmware 1.29, Battery Level counts only the charge above the
-reserve: it reaches 0 % at that point, and Shutdown Imminent turns on at about 8.5 %.
-With older firmware, the output turns off at about 18 % and Shutdown Imminent turns on
-at 25 %.
-
-The UPS sends its measurements about once a second. When none arrive for a minute, for
-example while the UPS has turned its output off on battery or updates its firmware, the
-measured values and status sensors show as unavailable until they resume. The settings
-stay available.
-
-Cell 1–4 Voltage, Max Voltage Difference, Battery Health and Number of Cycles are the
-values of the vendor app's battery health page. The UPS counts full charge cycles but
-does not report a health value: the integration estimates it from the number of cycles
-the way the vendor cloud does for the W150, from 100 % at up to 100 cycles down to 0 %
-at 1500. Power Event fires *Power Lost* or *Power Restored* when input power is lost or
-returns. Battery Fault, Battery Overheating, Battery Too Cold, Input Overvoltage and
-Output Overcurrent show the protection conditions the UPS reports. Battery Overheating
-turns on above 60 °C on the W150 and above 50 °C on the W180, Battery Too Cold below
-−10 °C. Input Overvoltage means that the adapter delivers more than 1.8 V above the
-configured Adapter Voltage.
-The Wi-Fi entities show the UPS's own network connection, which the vendor cloud and
-Wake-on-LAN use; they are updated every minute. The device page shows the front panel's
-firmware and hardware versions and the UPS version entities those of the power board,
-as the numbers the UPS reports. The vendor app shows them in its own format, e.g.
-firmware 19 as V1.19.
-
-The controls mirror the vendor app's advanced configuration page and use its wording in
-English, 简体中文 and Русский. Screen Brightness and Screen Idle Brightness are not in the
-app: the idle level applies once the screen timeout expires. Screen Brightness goes up
-to 80 %, the most the UPS allows. At 0 % the screen stays faintly lit.
-Sleep Time and Sleep Min Current turn the output off when the UPS runs on battery with a
-smaller load than the minimum current for longer than the sleep time. The output comes
-back when input power returns or the front-panel button is pressed, not when the load
-rises again. Temperature Unit needs front-panel firmware 1.18 or newer and is left out on
-older firmware.
+What each entity means, and what to watch out for: [Entities](docs/entities.md).
 
 > **⚠️ Warning:** Adapter Voltage and Adapter Current must match the label of the power
-> adapter feeding the UPS; wrong values can stop the battery from charging. The UPS also
-> generates Adapter Voltage at its output while on battery. As in the app, the other
-> adapter limits are derived from them, and the UPS applies the change only after you
-> gently press the reset hole on the front panel. A change fails with an error if the UPS
-> does not confirm that its power board received it. Both entities are disabled by
-> default.
+> adapter feeding the UPS, see [Controls](docs/entities.md#controls). Both are disabled
+> by default.
 
 </details>
 
 <br>
 
 > [!NOTE]
-> W180 support is based on its firmware and has not been tested on a W180 yet. Both
-> models run the same front-panel firmware, and the W180's power board, which charges a
-> Li-ion instead of a LiFePO4 battery, reports the same values and accepts the same
-> settings. The device page shows the model once the UPS is connected. According to the
-> vendor apps, the W120 sends an older telemetry format, which the integration does not
-> decode. Wake-on-LAN targets, Wi-Fi setup and the factory reset are not implemented.
-> Please [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if
-> you can help test the W180 or another model.
+> W180 support is based on its firmware and has not been tested on a W180 yet. The W120
+> sends an older telemetry format, which the integration does not decode. Wake-on-LAN
+> targets, Wi-Fi setup and the factory reset are not implemented. Please
+> [open an issue](https://github.com/zuyan9/ha-wallecube-ble/issues/new/choose) if you
+> can help test the W180 or another model.
+
+> [!IMPORTANT]
+> **Bluetooth LE limitation**: the UPS accepts only **one Bluetooth connection at a
+> time**. While this integration is connected, the WalleCube app can't find the UPS. To
+> use the app's Bluetooth functions, temporarily disable the integration in Home
+> Assistant, see [Troubleshooting](docs/troubleshooting.md#the-wallecube-app-cant-find-the-ups).
 
 ---
 
@@ -173,6 +135,16 @@ or add it manually with **Add Integration → WalleCube BLE**.
 
 ---
 
+## Documentation
+
+- [Entities](docs/entities.md): what each sensor, status and control means
+- [Shutting down a NAS or computer](docs/shutdown.md): USB, automations, and how much
+  time the UPS leaves
+- [Troubleshooting](docs/troubleshooting.md): the WalleCube app, availability,
+  diagnostics, logs and security
+
+---
+
 ## Development
 
 ### BLE Protocol
@@ -182,11 +154,9 @@ and the telemetry layout - is documented in [docs/ble-protocol.md](docs/ble-prot
 
 ### Contributing
 
-Contributions are welcome! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)**.
-
-To report wrong or missing values, enable packet collection in the integration options,
-reproduce the situation and attach the diagnostics download to your issue. Device
-addresses are masked in it.
+Contributions are welcome! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)**. To report
+wrong or missing values, attach a diagnostics download, see
+[Diagnostics](docs/troubleshooting.md#diagnostics).
 
 ---
 
