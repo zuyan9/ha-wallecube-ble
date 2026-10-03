@@ -45,28 +45,28 @@ No pairing, vendor account or internet connection is needed, see the
 
 <br>
 
-| *Sensors*                         | *Binary Sensors*    | *Events*    | *Controls*                   |
-|-----------------------------------|---------------------|-------------|------------------------------|
-| Battery Level                     | Input Power         | Power Event | Buzzer                       |
-| Battery Voltage                   | Charging            |             | Screen Language              |
-| Battery Current                   | Discharging         |             | Temperature Unit             |
-| Cell 1–4 Voltage                  | Overload            |             | Screen Timeout               |
-| Max Voltage Difference            | Shutdown Imminent   |             | Keep Screen On               |
-| Battery Health                    | Battery Fault       |             | Screen Brightness            |
-| Number of Cycles                  | Battery Overheating |             | Screen Idle Brightness       |
-| DC Input Voltage                  | Battery Too Cold    |             | Sleep Time                   |
-| DC Input Current                  | Input Overvoltage   |             | Sleep Min Current            |
-| DC Output Voltage                 | Output Overcurrent  |             | Adapter Voltage *(disabled)* |
-| DC Output Current                 | Wi-Fi               |             | Adapter Current *(disabled)* |
-| Output Power                      |                     |             |                              |
-| Battery Temperature               |                     |             |                              |
-| Discharge Time Remaining          |                     |             |                              |
-| Total Energy Consumed             |                     |             |                              |
-| UPS Firmware Version              |                     |             |                              |
-| UPS Hardware Version *(disabled)* |                     |             |                              |
-| Wi-Fi Signal                      |                     |             |                              |
-| Wi-Fi Network                     |                     |             |                              |
-| IP Address                        |                     |             |                              |
+| *Sensors*                         | *Binary Sensors*    | *Events*    | *Controls*                         |
+|-----------------------------------|---------------------|-------------|------------------------------------|
+| Battery Level                     | Input Power         | Power Event | Buzzer                             |
+| Battery Voltage                   | Charging            |             | Screen Language                    |
+| Battery Current                   | Discharging         |             | Temperature Unit                   |
+| Cell 1–4 Voltage                  | Overload            |             | Screen Timeout                     |
+| Max Voltage Difference            | Shutdown Imminent   |             | Keep Screen On                     |
+| Battery Health                    | Battery Fault       |             | Screen Brightness                  |
+| Number of Cycles                  | Battery Overheating |             | Screen Idle Brightness             |
+| DC Input Voltage                  | Battery Too Cold    |             | Sleep Time                         |
+| DC Input Current                  | Input Overvoltage   |             | Sleep Min Current                  |
+| DC Output Voltage                 | Output Overcurrent  |             | Adapter Voltage *(disabled)*       |
+| DC Output Current                 | Wi-Fi               |             | Adapter Current *(disabled)*       |
+| Output Power                      |                     |             | Auto Boot Min Outage *(disabled)*  |
+| Battery Temperature               |                     |             | Auto Boot Delay *(disabled)*       |
+| Discharge Time Remaining          |                     |             | Auto Boot Min Battery *(disabled)* |
+| Total Energy Consumed             |                     |             |                                    |
+| UPS Firmware Version              |                     |             |                                    |
+| UPS Hardware Version *(disabled)* |                     |             |                                    |
+| Wi-Fi Signal                      |                     |             |                                    |
+| Wi-Fi Network                     |                     |             |                                    |
+| IP Address                        |                     |             |                                    |
 
 What each entity means, and what to watch out for: [Entities](docs/entities.md).
 

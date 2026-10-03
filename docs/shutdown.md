@@ -22,7 +22,8 @@ Proxmox can add it.
   a few minutes, see [How much time Shutdown Imminent leaves](#how-much-time-shutdown-imminent-leaves).
 - The UPS can't be told over USB to turn its output off, so it keeps powering the NAS
   after the NAS has shut down. When input power returns, the NAS stays off unless the
-  outage lasted until the UPS turned its output off.
+  outage lasted until the UPS turned its output off. A UPS on Wi-Fi can wake it with
+  Wake-on-LAN, see Auto Boot in [Controls](entities.md#controls).
 - With power-board firmware older than 1.29, NUT shows a wrong battery temperature and
   battery current; the status and the charge are right. With 1.29, the UPS also signals
   a USB wake-up when input power returns, which wakes a computer that is asleep and
@@ -46,10 +47,10 @@ that is, are on the UPS too.
 - **Shutdown Imminent** turning on is the last resort, see
   [How much time Shutdown Imminent leaves](#how-much-time-shutdown-imminent-leaves).
 - **Battery Level** works with a margin. With power-board firmware 1.29 it counts only
-  the charge above the reserve the UPS keeps, so the output turns off at 0 %; with older
-  firmware it turns off at about 18 %.
-- Don't use **Discharge Time Remaining**, see
-  [Discharge Time Remaining](#discharge-time-remaining).
+  the charge above the reserve the UPS keeps, so the output turns off at 0 to 1 %; with
+  older firmware it turns off at about 18 %.
+- **Discharge Time Remaining** works with a margin as well, one that follows the load,
+  see [Discharge Time Remaining](#discharge-time-remaining).
 
 ```yaml
 triggers:
@@ -106,12 +107,22 @@ can draw more than 120 W, start the shutdown as soon as Input Power turns off.
 
 ## Discharge Time Remaining
 
-Like the UPS display, Discharge Time Remaining is the time until the battery would be
-empty at the present load, including the 18 % reserve. The UPS turns its output off at
-the reserve, so the value overstates the time left. At 50 W on a W150, it reads about
-15 minutes when Shutdown Imminent turns on, with about 4 minutes left, and still about
-12 minutes when the output turns off. A trigger such as "below 10 minutes" therefore
-never fires at low loads.
+Discharge Time Remaining is the time until the UPS turns its output off at its reserve,
+at the present load. The UPS estimates the time until its battery would be empty, which
+its display shows, and the integration scales that down to the charge above the
+reserve. At 50 W on a W150, it reads 3 to 4 minutes when Shutdown Imminent turns on,
+where the display still shows about 15.
+
+Treat it as the most time that is left:
+
+- It assumes the reserve of 18 % the UPS keeps by default. Neither the vendor app nor
+  this integration changes the reserve.
+- It follows an average of the output current, so it takes a while to catch up after
+  the load rises.
+- A high load turns the output off earlier, see [When the load is high](#when-the-load-is-high),
+  and so do an overheating battery and, at a very low load, Sleep Time.
+- It is unknown when the UPS did not get its power board's versions, see
+  [Versions](entities.md#versions).
 
 ## Power Event
 

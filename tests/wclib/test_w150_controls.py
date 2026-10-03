@@ -111,6 +111,16 @@ def wifi_reply(
     return ConfigMessage(message_type=0x01, token=0, payload=payload + ssid)
 
 
+def wake_on_lan_reply(
+    min_outage: int = 30, delay: int = 30, min_battery: int = 35
+) -> ConfigMessage:
+    return ConfigMessage(
+        message_type=0x0A,
+        token=0,
+        payload=struct.pack("<3H", min_outage, delay, min_battery),
+    )
+
+
 @pytest.fixture
 def screen(device: Device, mocker: MockerFixture):
     """Fake screen settings behind the configuration channel"""
@@ -131,6 +141,25 @@ def screen(device: Device, mocker: MockerFixture):
     return values
 
 
+@pytest.fixture
+def wake_on_lan(device: Device, mocker: MockerFixture):
+    """Fake Wake-on-LAN trigger behind the configuration channel"""
+    values = {"min_outage": 30, "delay": 30, "min_battery": 35}
+
+    async def send_config(message_type: int, payload: bytes = b"") -> None:
+        await asyncio.sleep(0)
+        if message_type == 0x09:
+            values["min_outage"], values["delay"], values["min_battery"] = (
+                struct.unpack("<3H", payload)
+            )
+        elif message_type == 0x0A:
+            reply = wake_on_lan_reply(**values)
+            asyncio.get_running_loop().create_task(device.config_parse(reply))
+
+    mocker.patch.object(device, "send_config", side_effect=send_config)
+    return values
+
+
 def test_declares_controls_of_the_app_settings_page(device: Device):
     # options in the order of the enum values
     assert {c.key: c.options_str for c in get_controls(device, controls.select)} == {
@@ -138,7 +167,7 @@ def test_declares_controls_of_the_app_settings_page(device: Device):
         "screen_language": ["english", "chinese"],
         "temperature_unit": ["celsius", "fahrenheit"],
     }
-    # the adapter ratings are disabled by default
+    # the adapter ratings and the Wake-on-LAN trigger are disabled by default
     assert {c.key: c.enabled for c in get_controls(device, controls.NumberType)} == {
         "adapter_voltage": False,
         "adapter_current": False,
@@ -147,6 +176,9 @@ def test_declares_controls_of_the_app_settings_page(device: Device):
         "screen_timeout": True,
         "screen_brightness": True,
         "screen_idle_brightness": True,
+        "wake_on_lan_min_outage": False,
+        "wake_on_lan_delay": False,
+        "wake_on_lan_min_battery": False,
     }
     assert [c.key for c in get_controls(device, controls.switch)] == [
         "screen_always_on"
@@ -163,8 +195,14 @@ async def test_refresh_reads_all_settings(device: Device, settings):
     assert device.buzzer_mode is BuzzerMode.ONCE
     assert device.screen_language is ScreenLanguage.ENGLISH
     assert device.temperature_unit is TemperatureUnit.CELSIUS
-    # screen settings and Wi-Fi status are answered with notifications
-    assert device.send_config.await_args_list == [call(0x0C), call(0x0E), call(0x01)]
+    # screen and Wake-on-LAN settings and Wi-Fi status are answered with
+    # notifications
+    assert device.send_config.await_args_list == [
+        call(0x0C),
+        call(0x0E),
+        call(0x0A),
+        call(0x01),
+    ]
 
 
 async def test_settings_missing_in_the_firmware_are_not_offered(
@@ -506,6 +544,57 @@ async def test_idle_brightness_fails_when_the_timeout_is_not_answered(
     device.send_config.assert_awaited_once_with(0x0C)
 
 
+async def test_wake_on_lan_reply_updates_the_trigger(device: Device):
+    assert await device.config_parse(wake_on_lan_reply(60, 120, 50)) is True
+
+    assert device.wake_on_lan_min_outage == 60
+    assert device.wake_on_lan_delay == 120
+    assert device.wake_on_lan_min_battery == 50
+
+
+async def test_wake_on_lan_change_keeps_the_other_values(device: Device, wake_on_lan):
+    await device.config_parse(wake_on_lan_reply())
+    # changed by another client while HA stays connected
+    wake_on_lan["min_outage"] = 60
+
+    await device.set_wake_on_lan_delay(120)
+    await asyncio.sleep(0)
+
+    assert wake_on_lan == {"min_outage": 60, "delay": 120, "min_battery": 35}
+    assert (device.wake_on_lan_min_outage, device.wake_on_lan_delay) == (60, 120)
+
+
+@pytest.mark.parametrize(
+    ("setter", "value", "written"),
+    [
+        ("set_wake_on_lan_min_outage", 5, {"min_outage": 10}),
+        ("set_wake_on_lan_delay", 70_000, {"delay": 0xFFFF}),
+        ("set_wake_on_lan_min_battery", 90, {"min_battery": 80}),
+        ("set_wake_on_lan_min_battery", 10, {"min_battery": 20}),
+    ],
+)
+async def test_wake_on_lan_values_fit_the_front_panel_limits(
+    device: Device, wake_on_lan, setter: str, value: int, written: dict[str, int]
+):
+    defaults = dict(wake_on_lan)
+
+    await getattr(device, setter)(value)
+
+    assert wake_on_lan == defaults | written
+
+
+async def test_wake_on_lan_change_fails_when_the_trigger_is_not_answered(
+    device: Device, mocker: MockerFixture
+):
+    mocker.patch.object(w150, "_CONFIG_REPLY_TIMEOUT", 0.01)
+    device.send_config = AsyncMock()
+
+    with pytest.raises(TimeoutError):
+        await device.set_wake_on_lan_min_battery(50)
+
+    device.send_config.assert_awaited_once_with(0x0A)
+
+
 async def test_wifi_status_reply_updates_network_fields(device: Device):
     assert await device.config_parse(wifi_reply()) is True
 
@@ -538,6 +627,9 @@ async def test_disconnected_wifi_status_clears_network_fields(device: Device):
             ConfigMessage(message_type=0x0E, token=0, payload=b"\x50"),
             "screen_brightness",
         ),
+        (wake_on_lan_reply(), "wake_on_lan_min_outage"),
+        (wake_on_lan_reply(), "wake_on_lan_delay"),
+        (wake_on_lan_reply(), "wake_on_lan_min_battery"),
         (wifi_reply(), "wifi_connected"),
         (wifi_reply(), "wifi_rssi"),
         (wifi_reply(), "wifi_ssid"),
@@ -556,7 +648,8 @@ async def test_each_config_reply_reaches_the_listeners(
 
 
 async def test_ignores_other_config_messages(device: Device):
-    message = ConfigMessage(message_type=0x0A, token=0, payload=bytes(6))
+    # the Wake-on-LAN targets
+    message = ConfigMessage(message_type=0x08, token=0, payload=b"\x00")
 
     assert await device.config_parse(message) is False
 

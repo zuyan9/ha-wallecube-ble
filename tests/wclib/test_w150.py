@@ -19,6 +19,7 @@ from custom_components.wallecube_ble.wclib.devices.w150 import Device, PowerEven
 from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
 from tests.fakes import (
     CIPHER,
+    W150_INFO,
     advertisement,
     ble_device,
     config_frame,
@@ -170,7 +171,9 @@ async def test_input_over_voltage_compares_the_output_with_the_adapter_voltage(
 @pytest.mark.parametrize(
     ("status_flags", "remaining_seconds", "expected"),
     [
-        (ON_BATTERY, 7_260, 121),
+        # 79 % of the time to empty at a battery level of 87.5 % with power-board
+        # firmware 1.29, the rest is the reserve
+        (ON_BATTERY, 7_260, 95),
         # the UPS shows the remaining time only while on battery
         (0, 7_260, None),
         # no load to estimate from, and a sample the battery monitor missed
@@ -181,8 +184,47 @@ async def test_input_over_voltage_compares_the_output_with_the_adapter_voltage(
 async def test_remaining_time_in_minutes_while_on_battery(
     device: Device, status_flags: int, remaining_seconds: int, expected: int | None
 ):
+    device.info_parse(W150_INFO + bytes(6))
+
     await device.data_parse(
         telemetry_frame(status_flags=status_flags, remaining_seconds=remaining_seconds)
+    )
+
+    assert device.remaining_time_discharging == expected
+
+
+@pytest.mark.parametrize(
+    ("power_board_firmware", "battery_permille", "expected"),
+    [
+        # 1.29 counts the level above the 18 % reserve and turns the output off at a
+        # level of 1 %. When Shutdown Imminent turns on, a quarter of the time to
+        # empty is left.
+        (29, 85, 3),
+        (29, 10, 0),
+        # older firmware counts the whole charge and turns the output off at 18 %
+        (27, 250, 4),
+        (27, 180, 0),
+        # without the version, the level can't be related to the whole charge
+        (0, 250, None),
+    ],
+)
+async def test_remaining_time_counts_down_to_the_output_cutoff(
+    device: Device,
+    power_board_firmware: int,
+    battery_permille: int,
+    expected: int | None,
+):
+    hardware = 3 if power_board_firmware else 0
+    device.info_parse(
+        struct.pack("<xHHHH", hardware, power_board_firmware, 3, 19) + bytes(6)
+    )
+
+    await device.data_parse(
+        telemetry_frame(
+            status_flags=ON_BATTERY,
+            battery_permille=battery_permille,
+            remaining_seconds=923,
+        )
     )
 
     assert device.remaining_time_discharging == expected
@@ -424,7 +466,7 @@ async def test_connect_and_notifications_update_fields(
     assert device.firmware_version == 19
     assert device.power_board_firmware_version == 29
     assert device.battery_level == 87.5
-    assert device.remaining_time_discharging == 121
+    assert device.remaining_time_discharging == 95
     battery_callback.assert_called_once()
 
 

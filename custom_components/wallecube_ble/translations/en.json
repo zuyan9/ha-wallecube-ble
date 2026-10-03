@@ -185,6 +185,15 @@
       },
       "screen_idle_brightness": {
         "name": "Screen Idle Brightness"
+      },
+      "wake_on_lan_min_outage": {
+        "name": "Auto Boot Min Outage"
+      },
+      "wake_on_lan_delay": {
+        "name": "Auto Boot Delay"
+      },
+      "wake_on_lan_min_battery": {
+        "name": "Auto Boot Min Battery"
       }
     },
     "select": {

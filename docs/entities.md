@@ -11,7 +11,7 @@ show as unavailable until measurements resume. The settings stay available.
 ## Battery
 
 - **Battery Level**: with power-board firmware 1.29 it counts only the charge above the
-  reserve the UPS keeps, 18 % by default, so 0 % is where the UPS turns its output off.
+  reserve the UPS keeps, 18 % by default, so the UPS turns its output off at 0 to 1 %.
   With older firmware it counts the whole charge, and the output turns off at about 18 %.
 - **Battery Voltage**: the sum of the cell voltages, corrected for the battery's internal
   resistance.
@@ -34,9 +34,9 @@ show as unavailable until measurements resume. The settings stay available.
 - **Output Power**: DC Output Voltage times DC Output Current.
 - **Total Energy Consumed**: the energy delivered at the output. The UPS saves it every
   2 Wh, so it can drop by up to 2 Wh when the UPS's power board restarts.
-- **Discharge Time Remaining**: reported only while the output runs on battery. Like the
-  UPS display, it counts down to an empty battery, but the UPS turns its output off
-  earlier, at its reserve; see [Discharge Time Remaining](shutdown.md#discharge-time-remaining).
+- **Discharge Time Remaining**: reported only while the output runs on battery. It counts
+  down to where the UPS turns its output off, at its reserve. The UPS display counts
+  down to an empty battery and shows more; see [Discharge Time Remaining](shutdown.md#discharge-time-remaining).
 
 ## Status
 
@@ -113,6 +113,13 @@ and sleep settings can't be changed until the UPS restarts.
   the most the UPS allows, and at 0 % the screen stays faintly lit. On front-panel build
   v1.0-29, one of the two builds of firmware 1.17, the idle brightness is fixed and
   Screen Idle Brightness has no effect.
+- **Auto Boot Min Outage**, **Auto Boot Delay** and **Auto Boot Min Battery** (disabled by
+  default) are not in the vendor app either. They set when the UPS wakes the computers
+  on the app's *Auto boot* list with Wake-on-LAN after an outage, over its Wi-Fi. Input
+  power must be lost for at least Auto Boot Min Outage. After it returns, the UPS waits
+  for Auto Boot Delay and until Battery Level is above Auto Boot Min Battery. The
+  defaults are 30 s, 30 s and 35 %. If the UPS restarted during the outage, it wakes
+  nothing.
 - **Temperature Unit**: the unit on the UPS's screen. It needs front-panel firmware 1.18
   or newer and is left out on older firmware.
 - **Screen Language**: English or Chinese on the UPS's screen.

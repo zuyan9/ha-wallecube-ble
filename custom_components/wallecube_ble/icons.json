@@ -57,6 +57,15 @@
       },
       "screen_idle_brightness": {
         "default": "mdi:brightness-4"
+      },
+      "wake_on_lan_min_outage": {
+        "default": "mdi:power-plug-off-outline"
+      },
+      "wake_on_lan_delay": {
+        "default": "mdi:timer-sand"
+      },
+      "wake_on_lan_min_battery": {
+        "default": "mdi:battery-charging-50"
       }
     },
     "select": {

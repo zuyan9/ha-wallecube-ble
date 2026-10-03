@@ -45,3 +45,15 @@ class StandbySettings(RawData):
 
     time: Annotated[int, "H"]  # s
     current_threshold: Annotated[int, "H"]  # mA
+
+
+class WakeOnLanTrigger(RawData):
+    """
+    When the UPS wakes its Wake-on-LAN targets after an outage
+
+    The vendor app calls the feature "Auto boot" and only manages the targets.
+    """
+
+    min_outage: Annotated[int, "H"]  # s
+    delay: Annotated[int, "H"]  # s, after input power returns
+    min_battery_level: Annotated[int, "H"]  # %

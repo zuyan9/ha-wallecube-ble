@@ -33,6 +33,7 @@ from ..model import (
     InfoBlock,
     StandbySettings,
     UpsTelemetry,
+    WakeOnLanTrigger,
     WifiStatus,
 )
 from ..model.wifi_status import ipv4
@@ -58,9 +59,21 @@ _over_voltage = prop_has_bit_on(10)
 # follows the input.
 _OVER_VOLTAGE_MARGIN = 2000
 
-# remaining time the power board reports when it has no load to estimate from, and
-# when its battery monitor missed a sample
+# remaining time the power board reports when it has no load to estimate from or the
+# estimate exceeds about 18 hours, and when its battery monitor missed a sample
 _RUNTIME_UNKNOWN = (0xFFFF, 0)
+
+# The power board estimates the remaining time until the battery is empty, but on
+# battery it turns the output off at its reserve capacity, in 0.1 % of the whole
+# charge. No client changes the reserve from its default, and reads of the standby
+# settings do not return it.
+_RESERVE_CAPACITY = 180
+# From this power-board firmware version on, the battery level counts only the charge
+# above the reserve, and the output turns off at a level of 1 %, just above the
+# reserve. One W180 build of 1.29 still turns it off at the reserve, at most 0.8 % of
+# the charge later.
+_LEVEL_ABOVE_RESERVE_FIRMWARE = 29
+_CUTOFF_LEVEL_ABOVE_RESERVE = 10  # 0.1 %
 
 # first power-board firmware version that accepts standby thresholds above 2000 mA
 _STANDBY_CURRENT_3000MA_FIRMWARE = 29
@@ -132,6 +145,8 @@ class PowerEvent(enum.IntEnum):
 _GET_WIFI_STATUS = 0x01
 _SET_SCREEN_TIMEOUT = 0x0B
 _GET_SCREEN_TIMEOUT = 0x0C
+_SET_WAKE_ON_LAN_TRIGGER = 0x09
+_GET_WAKE_ON_LAN_TRIGGER = 0x0A
 _SET_SCREEN_BRIGHTNESS = 0x0D
 _GET_SCREEN_BRIGHTNESS = 0x0E
 
@@ -227,6 +242,10 @@ class Device(DeviceBase, RawDataProps):
     # not in the vendor app
     screen_brightness = Field[int]()
     screen_idle_brightness = Field[int]()
+    # when the vendor app's "Auto boot" wakes its targets after an outage
+    wake_on_lan_min_outage = Field[int]()
+    wake_on_lan_delay = Field[int]()
+    wake_on_lan_min_battery = Field[int]()
 
     _warned_truncated = False
     _warned_power_board = False
@@ -236,10 +255,11 @@ class Device(DeviceBase, RawDataProps):
 
     def __init__(self, ble_dev: BLEDevice, adv_data: AdvertisementData) -> None:
         super().__init__(ble_dev, adv_data)
-        # adapter and standby values are written as whole blocks, so changes of two
-        # values in one block must not interleave or one of them is lost
+        # adapter, standby and Wake-on-LAN values are written as whole blocks, so
+        # changes of two values in one block must not interleave or one of them is lost
         self._adapter_lock = asyncio.Lock()
         self._standby_lock = asyncio.Lock()
+        self._wake_on_lan_lock = asyncio.Lock()
         self._screen_lock = asyncio.Lock()
         self._config_replies: dict[int, list[asyncio.Future[None]]] = defaultdict(list)
 
@@ -310,11 +330,8 @@ class Device(DeviceBase, RawDataProps):
         self.battery_health = _battery_health(telemetry.battery_cycles)
         self.input_over_voltage = _input_over_voltage(telemetry, self.adapter_voltage)
 
-        self.remaining_time_discharging = (
-            round(telemetry.remaining_time / 60)
-            if telemetry.remaining_time not in (None, *_RUNTIME_UNKNOWN)
-            and _on_battery(telemetry.status_flags)
-            else None
+        self.remaining_time_discharging = _minutes_until_output_off(
+            telemetry, self.power_board_firmware_version
         )
         self.power_event = _power_event(telemetry_frame.event)
 
@@ -330,6 +347,7 @@ class Device(DeviceBase, RawDataProps):
             _GET_WIFI_STATUS: self._parse_wifi_status,
             _GET_SCREEN_TIMEOUT: self._parse_screen_timeout,
             _GET_SCREEN_BRIGHTNESS: self._parse_screen_brightness,
+            _GET_WAKE_ON_LAN_TRIGGER: self._parse_wake_on_lan_trigger,
         }.get(message.message_type)
         if parse is None or not parse(message.payload):
             return False
@@ -387,6 +405,15 @@ class Device(DeviceBase, RawDataProps):
         self.screen_brightness = _brightness(payload[0])
         return True
 
+    def _parse_wake_on_lan_trigger(self, payload: bytes) -> bool:
+        if len(payload) < WakeOnLanTrigger.SIZE:
+            return False
+        trigger = WakeOnLanTrigger.from_bytes(payload)
+        self.wake_on_lan_min_outage = trigger.min_outage
+        self.wake_on_lan_delay = trigger.delay
+        self.wake_on_lan_min_battery = trigger.min_battery_level
+        return True
+
     async def refresh_settings(self) -> None:
         readers = (
             self._read_adapter,
@@ -396,6 +423,7 @@ class Device(DeviceBase, RawDataProps):
             self._read_buzzer_mode,
             self._request_screen_timeout,
             self._request_screen_brightness,
+            self._request_wake_on_lan_trigger,
             self._request_wifi_status,
         )
         if not await self._read_settings(readers):
@@ -486,6 +514,21 @@ class Device(DeviceBase, RawDataProps):
     async def set_screen_idle_brightness(self, percent: float) -> None:
         await self._write_idle_backlight(_backlight_level(percent))
 
+    # The vendor app only sets the targets, so these are left at their defaults
+    # unless changed here. The front panel raises the times below 10 s to 10 s and
+    # limits the battery level to 20-80 %.
+    @controls.duration(wake_on_lan_min_outage, min=10, max=0xFFFF, enabled=False)
+    async def set_wake_on_lan_min_outage(self, seconds: float) -> None:
+        await self._write_wake_on_lan_trigger(min_outage=round(seconds))
+
+    @controls.duration(wake_on_lan_delay, min=10, max=0xFFFF, enabled=False)
+    async def set_wake_on_lan_delay(self, seconds: float) -> None:
+        await self._write_wake_on_lan_trigger(delay=round(seconds))
+
+    @controls.percentage(wake_on_lan_min_battery, min=20, max=80, enabled=False)
+    async def set_wake_on_lan_min_battery(self, percent: float) -> None:
+        await self._write_wake_on_lan_trigger(min_battery_level=round(percent))
+
     # front-panel firmware before 1.18 has no temperature unit setting
     @controls.select(
         temperature_unit,
@@ -572,6 +615,35 @@ class Device(DeviceBase, RawDataProps):
             )
             await self._request_screen_timeout()
 
+    async def _write_wake_on_lan_trigger(
+        self,
+        *,
+        min_outage: int | None = None,
+        delay: int | None = None,
+        min_battery_level: int | None = None,
+    ) -> None:
+        # the three values are only written together, so the current ones are read
+        # first
+        async with self._wake_on_lan_lock:
+            await self._query_config(_GET_WAKE_ON_LAN_TRIGGER)
+            min_outage = (
+                min_outage if min_outage is not None else self.wake_on_lan_min_outage
+            )
+            delay = delay if delay is not None else self.wake_on_lan_delay
+            min_battery_level = (
+                min_battery_level
+                if min_battery_level is not None
+                else self.wake_on_lan_min_battery
+            )
+            if min_outage is None or delay is None or min_battery_level is None:
+                raise SettingUnavailable("Current Wake-on-LAN settings are unknown")
+
+            trigger = WakeOnLanTrigger(
+                min_outage=min_outage, delay=delay, min_battery_level=min_battery_level
+            )
+            await self.send_config(_SET_WAKE_ON_LAN_TRIGGER, trigger.to_bytes())
+            await self._request_wake_on_lan_trigger()
+
     async def _write_to_power_board(
         self, characteristic: str, payload: bytes, description: str
     ) -> None:
@@ -642,6 +714,9 @@ class Device(DeviceBase, RawDataProps):
     async def _request_screen_brightness(self) -> None:
         await self.send_config(_GET_SCREEN_BRIGHTNESS)
 
+    async def _request_wake_on_lan_trigger(self) -> None:
+        await self.send_config(_GET_WAKE_ON_LAN_TRIGGER)
+
     async def _request_wifi_status(self) -> None:
         await self.send_config(_GET_WIFI_STATUS)
 
@@ -689,6 +764,34 @@ def _battery_health(cycles: int | None) -> float | None:
     if cycles is None:
         return None
     return round(max(0.0, min(100.0, (1500 - cycles) / 14)), 1)
+
+
+def _minutes_until_output_off(
+    telemetry: UpsTelemetry, power_board_firmware: int | None
+) -> int | None:
+    """Time until the UPS turns its output off on battery, rounded down"""
+    seconds, level = telemetry.remaining_time, telemetry.battery_level
+    if (
+        # the UPS shows the remaining time only while the output runs on battery
+        not _on_battery(telemetry.status_flags)
+        or seconds is None
+        or seconds in _RUNTIME_UNKNOWN
+        or level is None
+        # without the version, the level can't be related to the whole charge
+        or power_board_firmware is None
+    ):
+        return None
+
+    # the estimate is proportional to the whole charge, in 0.1 %
+    if power_board_firmware >= _LEVEL_ABOVE_RESERVE_FIRMWARE:
+        above_reserve = (1000 - _RESERVE_CAPACITY) / 1000
+        charge = _RESERVE_CAPACITY + level * above_reserve
+        cutoff = _RESERVE_CAPACITY + _CUTOFF_LEVEL_ABOVE_RESERVE * above_reserve
+    else:
+        charge, cutoff = level, _RESERVE_CAPACITY
+    if charge <= cutoff:
+        return 0
+    return int(seconds * (charge - cutoff) / charge // 60)
 
 
 def _input_over_voltage(

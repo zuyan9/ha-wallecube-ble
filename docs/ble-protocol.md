@@ -188,8 +188,10 @@ blank outside −40 to 85 °C.
 `0x01` on the sample where it returns and `0x00` otherwise. It sends that sample as an
 extra notification right away. The vendor app labels `0x01` "PowerDown" and `0x02`
 "PowerOn", the opposite of the firmware logic: with `0x02` the firmware starts the
-Wake-on-LAN outage timer, with `0x01` the delay after input power returns. No event is
-sent for the first sample after boot.
+Wake-on-LAN outage timer, with `0x01` the delay after input power returns. From
+front-panel firmware 1.19 on, the first sample after boot carries no event. Firmware 1.18
+and build v1.0-28 of 1.17 send `0x01` or `0x02` for it; 1.16 and build v1.0-29 send
+`0x02` if it was taken on battery.
 
 **Battery cycle count**: equivalent full cycles, the charge moved into and out of the
 battery divided by twice the capacity. The power board keeps the count across restarts;
@@ -202,11 +204,13 @@ the cloud from the largest difference between the cell voltages.
 **Remaining time**: how long the battery would last at the present output load, from
 the remaining charge, derated by 5 %, and an average of the output current. It counts
 down to an empty battery, including the reserve capacity, although the UPS turns its
-output off when it reaches the reserve. The power board reports `0xFFFF` while the
-output current is too small for an estimate (below about 64 mA) and `0` when the battery
-monitor missed a sample. It computes the value on input power as well. Power-board
-firmware 1.21 works from the battery current instead and reports the time until the
-battery is full while charging.
+output off when it reaches the reserve: at a battery level of 18 % with power-board
+firmware before 1.29 and 0 % with the earlier W180 build of 1.29. The other builds of
+1.29 turn it off at 1 %. The power board reports `0xFFFF` while the output current is
+too small for an estimate (below about 64 mA) or the estimate exceeds 65535 s, and `0`
+when the battery monitor missed a sample. It computes the value on input power as well.
+Power-board firmware 1.21 works from the battery current instead and reports the time
+until the battery is full while charging.
 
 The front panel shows payload offset 26 divided by 60 as minutes. It does so only under
 all of these conditions:
@@ -451,7 +455,7 @@ they do not match the raw numbers.
 | `0x07` | - | clear Wake-on-LAN targets |
 | `0x08` | - | request Wake-on-LAN targets, answered as type `0x08` with u8 count and the MACs |
 | `0x09` | 3 × u16 | set Wake-on-LAN trigger, see below |
-| `0x0A` | - | request Wake-on-LAN trigger, answered as type `0x0A` |
+| `0x0A` | - | request Wake-on-LAN trigger, answered as type `0x0A` with the same 3 × u16 |
 | `0x0B` | u32 timeout (s, at least 30; `0xFFFFFFFF` keeps the screen on), optional u8 idle backlight level (up to 100) | set screen timeout |
 | `0x0C` | - | request screen timeout, answered as type `0x0C` with u32 timeout and u8 idle backlight level |
 | `0x0D` | u8 backlight level (20-100) | set active backlight |
@@ -500,18 +504,27 @@ its network connection after an outage. Its payload is three u16 values:
 - delay after input power returns (s, at least 10);
 - minimum battery level for sending (%, 20-80).
 
-Defaults: 30 s, 30 s, 35 %.
+Defaults: 30 s, 30 s, 35 %. The front panel tells a lost input from the telemetry, as
+for the event byte. Once the delay has passed, it waits until the battery level is above
+the minimum and Wi-Fi is connected. It then broadcasts a magic packet for each target to
+UDP port 9, and five more times 11 s apart. It sends nothing after a shorter outage, or
+after one during which it restarted and came back on input power. The vendor apps
+manage the targets but not the trigger.
 
 The integration exposes the settings of the vendor app's advanced configuration page:
 adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
 exposes the versions from the info block, the event byte and the Wi-Fi status, which it
-requests every minute, and both screen backlight levels as brightness, 100 minus the
-level. When no telemetry notification arrives for 60 s, it shows the telemetry values as
-unavailable until the next one. It waits for the result of adapter writes and sends an
-unconfirmed block once more; standby writes stay unconfirmed. It shows adapter and
-standby blocks with a value below the power board's range as unknown and does not write
-them, and while the info block reports power-board versions 0, it reads the info block
-and both blocks again, 3 and 13 s after reading the settings. Its input over-voltage
-sensor is also on while status bit 10 is set and the output voltage is at least 2 V
-above the adapter voltage, the condition that keeps fault bit 10 set. The factory reset,
-`0xF0B7`, the last three standby values, Wake-on-LAN and Wi-Fi setup are not exposed.
+requests every minute, both screen backlight levels as brightness, 100 minus the level,
+and the Wake-on-LAN trigger. It reports the remaining time until the output turns off
+instead of until the battery is empty: it scales payload offset 26 by the share of the
+charge above the cut-off, assuming the default reserve, and reports none while the
+power-board version is unknown. When no telemetry notification arrives for 60 s, it
+shows the telemetry values as unavailable until the next one. It waits for the result of
+adapter writes and sends an unconfirmed block once more; standby writes stay
+unconfirmed. It shows adapter and standby blocks with a value below the power board's
+range as unknown and does not write them, and while the info block reports power-board
+versions 0, it reads the info block and both blocks again, 3 and 13 s after reading the
+settings. Its input over-voltage sensor is also on while status bit 10 is set and the
+output voltage is at least 2 V above the adapter voltage, the condition that keeps fault
+bit 10 set. The factory reset, `0xF0B7`, the last three standby values, the Wake-on-LAN
+targets and Wi-Fi setup are not exposed.
