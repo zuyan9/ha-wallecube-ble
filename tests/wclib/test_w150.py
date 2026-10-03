@@ -217,7 +217,8 @@ async def test_telemetry_values_go_stale_without_frames(
     assert device._check_data(device._last_data + 59) == pytest.approx(1)
     assert device.data_current
 
-    device._check_data(device._last_data + 60)
+    # past the timeout, as _last_data + 60 can round to just under it
+    device._check_data(device._last_data + 61)
 
     assert not device.data_current
     level.assert_called_once()
@@ -229,7 +230,7 @@ async def test_next_frame_makes_stale_values_current_again(
     device: Device, mocker: MockerFixture
 ):
     await device._on_data(telemetry_frame())
-    device._check_data(device._last_data + 60)
+    device._check_data(device._last_data + 61)
     level = mocker.Mock()
     device.subscribe("battery_level", level, throttled=True)
 
@@ -280,7 +281,7 @@ async def test_throttled_listeners_follow_the_update_period(
     voltage.assert_called_once()
 
     clock.return_value = 1018
-    device._check_data(device._last_data + 60)
+    device._check_data(device._last_data + 61)
 
     # availability changes are not held back by the update period
     assert level.call_count == 5

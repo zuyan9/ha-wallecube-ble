@@ -4,8 +4,7 @@
 
 **Unofficial Bluetooth LE Integration for Home Assistant**
 
-[![hassfest](https://img.shields.io/github/actions/workflow/status/zuyan9/ha-wallecube-ble/validate-hassfest.yaml?style=for-the-badge&label=hassfest)](https://github.com/zuyan9/ha-wallecube-ble/actions/workflows/validate-hassfest.yaml)
-[![HACS Validation](https://img.shields.io/github/actions/workflow/status/zuyan9/ha-wallecube-ble/validate-hacs.yaml?style=for-the-badge&label=HACS)](https://github.com/zuyan9/ha-wallecube-ble/actions/workflows/validate-hacs.yaml)
+[![CI](https://img.shields.io/github/actions/workflow/status/zuyan9/ha-wallecube-ble/ci.yaml?branch=main&style=for-the-badge&label=CI)](https://github.com/zuyan9/ha-wallecube-ble/actions/workflows/ci.yaml)
 
 ---
 

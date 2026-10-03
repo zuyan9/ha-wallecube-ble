@@ -56,13 +56,12 @@ tests in `tests/ha/`; the library tests do not need it.
 ### Running tests
 
 ```bash
-uv run --with aiohasupervisor --with serialx pytest
+uv run pytest
 ```
 
 This runs the library tests in `tests/wclib/` and the Home Assistant tests in
-`tests/ha/`. Some of Home Assistant's Bluetooth dependencies are not declared by the
-`hass` group, hence the `--with`. Without them, plain `uv run pytest` runs the library
-tests and skips the Home Assistant ones. Use `-k <name>` for a single test.
+`tests/ha/`. The Home Assistant tests are skipped when the `hass` group is not
+installed. Use `-k <name>` for a single test.
 
 `tests/fakes.py` holds a fake UPS that encrypts like the real one. Add tests for
 protocol changes next to the existing ones in `tests/wclib/`.

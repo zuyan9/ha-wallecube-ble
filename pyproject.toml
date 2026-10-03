@@ -26,9 +26,10 @@ test = [
   "pytest-mock",
 ]
 hass = [
+  "aiohasupervisor",
   "aiousbwatcher",
   "homeassistant>=2024.7",
-  "pyserial",
+  "serialx",
 ]
 lint = [
   "prek",
@@ -209,10 +210,6 @@ ignore = [
   "TID252",
 ]
 mccabe.max-complexity = 15
-
-[tool.pyproject-fmt]
-table_format = "short"
-expand_tables = [ "tool.ruff" ]
 
 [tool.pytest]
 ini_options.asyncio_mode = "auto"

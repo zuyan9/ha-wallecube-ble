@@ -99,7 +99,7 @@ async def test_telemetry_entities_are_unavailable_while_telemetry_is_stale(
     level.async_write_ha_state.reset_mock()
     charging.async_write_ha_state.reset_mock()
 
-    device._check_data(device._last_data + 60)
+    device._check_data(device._last_data + 61)
 
     # settings stay usable, and the event keeps its last state
     assert [entity.available for entity in entities] == [False, False, True, True]
