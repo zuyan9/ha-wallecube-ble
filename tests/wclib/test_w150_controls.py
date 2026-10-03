@@ -10,6 +10,7 @@ from custom_components.wallecube_ble.wclib import controls, get_controls
 from custom_components.wallecube_ble.wclib.connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     BUZZER_CHARACTERISTIC_UUID,
+    INFO_CHARACTERISTIC_UUID,
     LANGUAGE_CHARACTERISTIC_UUID,
     STANDBY_CHARACTERISTIC_UUID,
     TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
@@ -32,10 +33,14 @@ from custom_components.wallecube_ble.wclib.packet import (
     COMMAND_CONFIRMED,
     ConfigMessage,
 )
+from tests.fakes import W150_INFO
 
 # read responses carry the payload after the magic byte, zero padded to a block
 ADAPTER_12V_3A = struct.pack("<5H", 3000, 2000, 12000, 11580, 11496) + bytes(5)
 STANDBY_300S_100MA = struct.pack("<2H", 300, 100) + bytes(11)
+# what the front panel reports until it got the answers of the power board
+NO_POWER_BOARD_INFO = bytes.fromhex("00 0000 0000 0300 1300") + bytes(6)
+NO_POWER_BOARD_BLOCK = bytes(15)
 
 
 @pytest.fixture
@@ -48,12 +53,15 @@ def results() -> list[int]:
 def settings(device: Device, mocker: MockerFixture, results: list[int]):
     """Fake device storage behind read_value/send_command"""
     values = {
+        INFO_CHARACTERISTIC_UUID: W150_INFO + bytes(6),
         ADAPTER_CHARACTERISTIC_UUID: ADAPTER_12V_3A,
         STANDBY_CHARACTERISTIC_UUID: STANDBY_300S_100MA,
         BUZZER_CHARACTERISTIC_UUID: b"\x01" + bytes(14),
         LANGUAGE_CHARACTERISTIC_UUID: b"\x00" + bytes(14),
         TEMPERATURE_UNIT_CHARACTERISTIC_UUID: b"\x00" + bytes(14),
     }
+    # read while connecting
+    device.info_parse(values[INFO_CHARACTERISTIC_UUID])
 
     # every call yields like a real GATT round trip, so concurrent changes interleave
     async def read_value(characteristic: str) -> bytes:
@@ -198,6 +206,101 @@ async def test_select_writes_option_value(device: Device, settings):
     device.send_command.assert_awaited_once_with(BUZZER_CHARACTERISTIC_UUID, b"\x02")
     assert device.buzzer_mode is BuzzerMode.REPEAT
     state_callback.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("read", "field_name"),
+    [
+        ("_read_adapter", "adapter_voltage"),
+        ("_read_adapter", "adapter_current"),
+        ("_read_standby", "standby_time"),
+        ("_read_standby", "standby_current_threshold"),
+        ("_read_temperature_unit", "temperature_unit"),
+        ("_read_screen_language", "screen_language"),
+        ("_read_buzzer_mode", "buzzer_mode"),
+    ],
+)
+async def test_each_setting_read_reaches_the_listeners(
+    device: Device, settings, read: str, field_name: str
+):
+    listener = MagicMock()
+    device.subscribe(field_name, listener)
+
+    # on its own, like the read after a change
+    await getattr(device, read)()
+
+    listener.assert_called_once()
+
+
+async def test_settings_the_power_board_did_not_report_are_unknown(
+    device: Device, settings
+):
+    settings[ADAPTER_CHARACTERISTIC_UUID] = NO_POWER_BOARD_BLOCK
+    settings[STANDBY_CHARACTERISTIC_UUID] = NO_POWER_BOARD_BLOCK
+
+    await device.refresh_settings()
+
+    assert (device.adapter_voltage, device.adapter_current) == (None, None)
+    assert (device.standby_time, device.standby_current_threshold) == (None, None)
+    # a block written from them would carry the front panel's minimums, e.g. 2 A
+    for change, value in (
+        (device.set_adapter_voltage, 12.0),
+        (device.set_adapter_current, 5.0),
+        (device.set_standby_time, 600),
+        (device.set_standby_current_threshold, 150),
+    ):
+        with pytest.raises(SettingUnavailable):
+            await change(value)
+    device.send_confirmed_command.assert_not_awaited()
+    device.send_command.assert_not_awaited()
+
+
+async def test_power_board_values_are_read_again_once_the_front_panel_has_them(
+    device: Device, settings, mocker: MockerFixture
+):
+    mocker.patch.object(w150, "_POWER_BOARD_REREAD_DELAYS", (0, 0))
+    # connected right after the UPS started, before it asked its power board
+    device.info_parse(NO_POWER_BOARD_INFO)
+    settings[ADAPTER_CHARACTERISTIC_UUID] = NO_POWER_BOARD_BLOCK
+    settings[STANDBY_CHARACTERISTIC_UUID] = NO_POWER_BOARD_BLOCK
+    read = device.read_value
+
+    async def read_value(characteristic: str) -> bytes:
+        if characteristic == INFO_CHARACTERISTIC_UUID:
+            # the power board answered meanwhile
+            settings[ADAPTER_CHARACTERISTIC_UUID] = ADAPTER_12V_3A
+            settings[STANDBY_CHARACTERISTIC_UUID] = STANDBY_300S_100MA
+        return await read(characteristic)
+
+    mocker.patch.object(device, "read_value", side_effect=read_value)
+    model = MagicMock()
+    device.subscribe("power_board_hardware_version", model)
+
+    await device.refresh_settings()
+
+    assert device.device == "W150"
+    assert (device.adapter_voltage, device.standby_time) == (12.0, 300)
+    model.assert_called_once()
+
+
+async def test_missing_power_board_versions_are_reported_once(
+    device: Device, settings, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+):
+    mocker.patch.object(w150, "_POWER_BOARD_REREAD_DELAYS", (0, 0))
+    # the power board answered the requests for its settings, not for its versions
+    device.info_parse(NO_POWER_BOARD_INFO)
+    settings[INFO_CHARACTERISTIC_UUID] = NO_POWER_BOARD_INFO
+
+    await device.refresh_settings()
+    await device.refresh_settings()
+
+    reads = [args.args[0] for args in device.read_value.await_args_list]
+    assert reads.count(INFO_CHARACTERISTIC_UUID) == 4
+    warnings = [r for r in caplog.records if "versions of its power board" in r.message]
+    assert len(warnings) == 1
+    # the settings it reported can be changed
+    await device.set_standby_time(600)
+    device.send_command.assert_awaited_once()
 
 
 async def test_unknown_select_value_reads_as_none(device: Device, settings):
@@ -423,6 +526,33 @@ async def test_disconnected_wifi_status_clears_network_fields(device: Device):
     assert device.wifi_rssi is None
     assert device.wifi_ip_address is None
     assert device.wifi_ssid is None
+
+
+@pytest.mark.parametrize(
+    ("reply", "field_name"),
+    [
+        (screen_reply(600), "screen_timeout"),
+        (screen_reply(SCREEN_ALWAYS_ON), "screen_always_on"),
+        (screen_reply(600), "screen_idle_brightness"),
+        (
+            ConfigMessage(message_type=0x0E, token=0, payload=b"\x50"),
+            "screen_brightness",
+        ),
+        (wifi_reply(), "wifi_connected"),
+        (wifi_reply(), "wifi_rssi"),
+        (wifi_reply(), "wifi_ssid"),
+        (wifi_reply(), "wifi_ip_address"),
+    ],
+)
+async def test_each_config_reply_reaches_the_listeners(
+    device: Device, reply: ConfigMessage, field_name: str
+):
+    listener = MagicMock()
+    device.subscribe(field_name, listener)
+
+    await device.config_parse(reply)
+
+    listener.assert_called_once()
 
 
 async def test_ignores_other_config_messages(device: Device):

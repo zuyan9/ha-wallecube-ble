@@ -22,12 +22,15 @@ from tests.fakes import (
     advertisement,
     ble_device,
     config_frame,
+    drop_link,
     encrypted,
     notify_handler,
     telemetry_frame,
+    ups_client,
 )
 
 ON_BATTERY = 1 << 8
+INPUT_POWER = 1 << 10
 
 
 def test_check_matches_advertised_name_or_service(mocker: MockerFixture):
@@ -131,6 +134,40 @@ async def test_maps_fault_flag_bits(device: Device, bit: int, field_name: str | 
 
 
 @pytest.mark.parametrize(
+    ("adapter_voltage", "output_mv", "status_flags", "fault_flags", "expected"),
+    [
+        # on input power the output follows the input, which is 2 V above the setting
+        (12.0, 14_000, INPUT_POWER, 0, True),
+        (12.0, 13_999, INPUT_POWER, 0, False),
+        # on battery the output follows the setting the power board started with
+        (12.0, 14_000, ON_BATTERY, 0, False),
+        # the power board's own flag
+        (12.0, 12_020, INPUT_POWER, 1 << 10, True),
+        # with the setting unknown only the flag counts
+        (None, 12_020, INPUT_POWER, 1 << 10, True),
+        (None, 19_000, INPUT_POWER, 0, False),
+    ],
+)
+async def test_input_over_voltage_compares_the_output_with_the_adapter_voltage(
+    device: Device,
+    adapter_voltage: float | None,
+    output_mv: int,
+    status_flags: int,
+    fault_flags: int,
+    expected: bool,
+):
+    device.adapter_voltage = adapter_voltage
+
+    await device.data_parse(
+        telemetry_frame(
+            output_mv=output_mv, status_flags=status_flags, fault_flags=fault_flags
+        )
+    )
+
+    assert device.input_over_voltage is expected
+
+
+@pytest.mark.parametrize(
     ("status_flags", "remaining_seconds", "expected"),
     [
         (ON_BATTERY, 7_260, 121),
@@ -191,6 +228,7 @@ def test_data_fields_are_the_values_from_telemetry(device: Device):
         "battery_level",
         "input_power_ok",
         "battery_fault",
+        "input_over_voltage",
         "output_power",
         "remaining_time_discharging",
     } <= device.data_fields
@@ -224,6 +262,22 @@ async def test_telemetry_values_go_stale_without_frames(
     level.assert_called_once()
     charging.assert_called_once()
     standby.assert_not_called()
+
+
+async def test_each_frame_restarts_the_stale_timer(
+    device: Device, mocker: MockerFixture
+):
+    clock = mocker.patch(
+        "custom_components.wallecube_ble.wclib.devicebase.time.monotonic"
+    )
+    clock.return_value = 1000.0
+    await device._on_data(telemetry_frame())
+    clock.return_value = 1050.0
+    await device._on_data(telemetry_frame())
+
+    # 70 s after the first frame, but 20 s after the last
+    assert device._check_data(1070.0) == pytest.approx(40)
+    assert device.data_current
 
 
 async def test_next_frame_makes_stale_values_current_again(
@@ -303,6 +357,7 @@ async def test_decodes_truncated_frame_partially(device: Device):
     assert device.cell_voltage_4 is None
     assert device.cell_voltage_difference is None
     assert device.battery_health is None
+    assert device.input_over_voltage is None
 
 
 async def test_each_power_event_reaches_the_listeners(device: Device):
@@ -479,6 +534,39 @@ async def test_diagnostics_do_not_identify_the_device(
     assert diagnostics["frames_received"][2][2] == "01c4" + "00" * 19
     assert diagnostics["frames_received"][3][2] == telemetry_frame().hex()
     assert diagnostics["frames_sent"] == [(ANY, "F0B2", "0102")]
+
+
+async def test_diagnostics_continue_those_of_an_earlier_object(
+    device: Device, establish, client, mocker: MockerFixture
+):
+    mocker.patch.object(Device, "refresh_settings", new=AsyncMock())
+    await device.connect()
+    drop_link(establish, client)
+    await device.disconnect()
+
+    # Home Assistant creates the device anew when it reloads after the disconnect
+    reloaded = Device(ble_device(), advertisement())
+    reloaded.diagnostics.continue_from(device.diagnostics)
+    establish.return_value = ups_client()
+    await reloaded.connect()
+
+    history = reloaded.diagnostics.build_diagnostics_dict()["connection_history"]
+    states = [item["state"] for item in history]
+    assert states[states.index("AUTHENTICATED") :] == [
+        "AUTHENTICATED",
+        "DISCONNECTED",
+        "ESTABLISHING_CONNECTION",
+        "CONNECTED",
+        "ESTABLISHING_SESSION",
+        "SESSION_ESTABLISHED",
+        "SUBSCRIBING",
+        "AUTHENTICATED",
+    ]
+    times = [item["time"] for item in history]
+    assert times == sorted(times)
+    frames = reloaded.diagnostics.build_diagnostics_dict()["frames_received"]
+    assert [source for _, source, _ in frames] == ["F0BF", "F0BF"]
+    await reloaded.disconnect()
 
 
 def test_diagnostics_keep_the_recent_history(device: Device):

@@ -58,11 +58,11 @@ show as unavailable until measurements resume. The settings stay available.
   UPS restart.
 - **Battery Overheating**: the battery is above 60 °C on the W150 or 50 °C on the W180.
 - **Battery Too Cold**: the battery is below −10 °C.
-- **Input Overvoltage**: the power board's over-voltage protection. On input power the
-  output follows the input, and the protection trips when it is more than 1.8 V above
-  Adapter Voltage. The power board sets this flag only when the trip coincides with a
-  change of input power, so the sensor rarely turns on, even with an adapter whose
-  voltage is too high.
+- **Input Overvoltage**: on while input power is present and DC Output Voltage, which
+  then follows the input, is at least 2 V above Adapter Voltage: the adapter delivers
+  more than Adapter Voltage says. The power board's own over-voltage flag also turns it
+  on, but the power board rarely sets it: only when the voltage passes about 1.8 V above
+  Adapter Voltage at the moment input power changes.
 - **Output Overcurrent**: the output current is above the UPS's limit, 155 W (W150) or
   185 W (W180) divided by Adapter Voltage, at most 11.5 A or 12.5 A. The UPS only
   reports it.
@@ -82,10 +82,17 @@ The device page shows the firmware and hardware versions of the UPS's front pane
 **UPS Firmware Version** and **UPS Hardware Version** those of its power board, as the
 numbers the UPS reports. The vendor app shows them in its own format, e.g. firmware 19
 as V1.19. The power board's hardware version tells the model: 3 is a W150, 4 a W180.
+Without the power board's versions, the model shows as WalleCube UPS, see
+[Controls](#controls).
 
 ## Controls
 
 The controls mirror the vendor app's advanced configuration page.
+
+The UPS asks its power board once for its versions and the adapter and sleep settings,
+shortly after it starts. When the integration connects before that, it reads them again
+a few seconds later. If the UPS did not get them, they show as unknown, and the adapter
+and sleep settings can't be changed until the UPS restarts.
 
 - **Adapter Voltage** and **Adapter Current** (disabled by default) must match the label
   of the power adapter feeding the UPS. The UPS also generates Adapter Voltage at its

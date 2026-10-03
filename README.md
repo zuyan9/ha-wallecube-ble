@@ -97,7 +97,7 @@ What each entity means, and what to watch out for: [Entities](docs/entities.md).
 
 ### Prerequisites
 
-- Home Assistant 2025.2 or newer with Bluetooth support (a local adapter or an
+- Home Assistant 2025.3 or newer with Bluetooth support (a local adapter or an
   [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) in range).
   The WalleCube icon and logo show in the UI from Home Assistant 2026.3
 - [HACS](https://hacs.xyz/) installed (recommended method)

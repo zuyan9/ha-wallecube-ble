@@ -13,9 +13,14 @@ from homeassistant.components import bluetooth
 from homeassistant.config_entries import SOURCE_BLUETOOTH, ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble import async_setup_entry, async_unload_entry
+from custom_components.wallecube_ble import (
+    async_remove_entry,
+    async_setup_entry,
+    async_unload_entry,
+)
 from custom_components.wallecube_ble.const import DOMAIN
 from custom_components.wallecube_ble.wclib.connection import (
     CONFIG_CHARACTERISTIC_UUID,
@@ -23,6 +28,7 @@ from custom_components.wallecube_ble.wclib.connection import (
     TELEMETRY_CHARACTERISTIC_UUID,
     ConnectionState,
 )
+from custom_components.wallecube_ble.wclib.devices import w150
 from custom_components.wallecube_ble.wclib.encryption import (
     SessionCipher,
     derive_session_key,
@@ -180,6 +186,86 @@ async def test_disconnect_during_session_setup_retries_setup(
 
     assert err.value.translation_key == "could_not_connect"
     hass.config_entries.async_forward_entry_setups.assert_not_awaited()
+
+
+async def test_unload_survives_a_disconnect_timeout(hass, entry, establish, client):
+    assert await async_setup_entry(hass, entry)
+    # bleak raises it when BlueZ does not confirm the end of the link in time
+    client.disconnect.side_effect = TimeoutError
+
+    assert await async_unload_entry(hass, entry)
+    hass.config_entries.async_unload_platforms.assert_awaited_once()
+
+
+async def reload(hass, entry: ConfigEntry) -> None:
+    """Unload and set up the entry again, like Home Assistant reloads it"""
+    assert await async_unload_entry(hass, entry)
+    await entry._async_process_on_unload(hass)
+    object.__delattr__(entry, "runtime_data")
+    assert await async_setup_entry(hass, entry)
+
+
+async def test_reload_after_a_disconnect_keeps_the_diagnostics(
+    hass, entry, establish, client
+):
+    assert await async_setup_entry(hass, entry)
+    device = entry.runtime_data
+    drop_link(establish, client)
+    hass.config_entries.async_schedule_reload.assert_called_once_with(entry.entry_id)
+
+    establish.return_value = ups_client()
+    await reload(hass, entry)
+
+    # a new device, which continues the history of the one before
+    assert entry.runtime_data is not device
+    history = entry.runtime_data.diagnostics.build_diagnostics_dict()[
+        "connection_history"
+    ]
+    states = [item["state"] for item in history if "state" in item]
+    assert states.count("AUTHENTICATED") == 2
+    assert "DISCONNECTED" in states[states.index("AUTHENTICATED") :]
+    await async_unload_entry(hass, entry)
+
+
+async def test_removed_entry_forgets_its_diagnostics(hass, entry, establish):
+    assert await async_setup_entry(hass, entry)
+    assert await async_unload_entry(hass, entry)
+    await entry._async_process_on_unload(hass)
+    object.__delattr__(entry, "runtime_data")
+
+    await async_remove_entry(hass, entry)
+
+    assert await async_setup_entry(hass, entry)
+    history = entry.runtime_data.diagnostics.build_diagnostics_dict()[
+        "connection_history"
+    ]
+    assert [item["state"] for item in history].count("AUTHENTICATED") == 1
+    await async_unload_entry(hass, entry)
+
+
+async def test_late_power_board_versions_update_the_device_entry(
+    hass, entry, establish, client, mocker: MockerFixture
+):
+    mocker.patch.object(w150, "_POWER_BOARD_REREAD_DELAYS", (0,))
+    registry = mocker.patch.object(dr, "async_get").return_value
+    device_entry = MagicMock()
+    entries = mocker.patch.object(
+        dr, "async_entries_for_config_entry", return_value=[device_entry]
+    )
+    info = client.read_gatt_char.return_value
+    # read before the UPS asked its power board, later reads get the answer
+    reads = iter([encrypted(b"\x51" + bytes.fromhex("00 0000 0000 0300 1300"))])
+    client.read_gatt_char.side_effect = lambda characteristic: next(reads, info)
+
+    assert await async_setup_entry(hass, entry)
+    assert entry.runtime_data.device == "WalleCube UPS"
+    await entry.runtime_data._refresh_task
+
+    entries.assert_called_once_with(registry, entry.entry_id)
+    registry.async_update_device.assert_called_once_with(
+        device_entry.id, model="W150", name="W150-4E52"
+    )
+    await async_unload_entry(hass, entry)
 
 
 async def test_retry_reason_does_not_name_the_address(hass, entry, establish):

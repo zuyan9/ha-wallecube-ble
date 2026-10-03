@@ -206,7 +206,9 @@ class Connection:
         self._set_state(ConnectionState.ESTABLISHING_CONNECTION)
         self._logger.info("Connecting to device")
         try:
-            self._client = await establish_connection(
+            # kept in a local: `disconnected` clears `_client` when bleak reports the
+            # end of the link, which can happen at any await of the handshake
+            client = self._client = await establish_connection(
                 BleakClient,
                 self._ble_dev,
                 # only used in messages, which would otherwise carry the factory MAC
@@ -214,15 +216,16 @@ class Connection:
                 disconnected_callback=self.disconnected,
                 ble_device_callback=lambda: self._ble_dev,
             )
+            self._ensure_connected(client)
             self._set_state(ConnectionState.CONNECTED)
             self._logger.info("Connected, establishing session")
             self._errors = 0
             # kept after disconnecting: the set only changes with a firmware update
             self._characteristics = frozenset(
-                c.uuid for c in self._client.services.characteristics.values()
+                c.uuid for c in client.services.characteristics.values()
             )
-            await self._establish_session()
-            await self._subscribe()
+            await self._establish_session(client)
+            await self._subscribe(client)
         except _FAILURE_TYPES as e:
             await self._fail(e)
             raise
@@ -231,16 +234,19 @@ class Connection:
         self._set_state(ConnectionState.AUTHENTICATED)
         self._logger.info("Session established, receiving telemetry")
 
-    def disconnected(self, *args: Any) -> None:
+    def disconnected(self, client: BleakClient) -> None:
         """Handle a disconnect reported by bleak"""
+        # e.g. a link this connection ended itself, which BlueZ can report late
+        if client is not self._client:
+            return
         self._client = None
 
-        # bleak-retry-connector retries internally and raises on the final failure
-        if self._connection_state is ConnectionState.ESTABLISHING_CONNECTION:
-            return
-
-        if self._connection_state is ConnectionState.DISCONNECTING:
-            self._set_state(ConnectionState.DISCONNECTED)
+        # `connect` fails and reports a link lost before the session is established;
+        # bleak-retry-connector also retries internally and raises on the final failure
+        if (
+            self._connection_state is ConnectionState.ESTABLISHING_CONNECTION
+            or self._connection_state.is_connected
+        ):
             return
 
         # errors have already been reported to the listeners
@@ -256,8 +262,7 @@ class Connection:
         client, self._client = self._client, None
         if client is not None and client.is_connected:
             self._set_state(ConnectionState.DISCONNECTING)
-            with contextlib.suppress(EOFError, BleakError):
-                await client.disconnect()
+            await self._disconnect_client(client)
 
         if self._connection_state is not ConnectionState.DISCONNECTED:
             self._set_state(ConnectionState.DISCONNECTED)
@@ -265,7 +270,9 @@ class Connection:
     async def read_value(self, characteristic: str) -> bytes:
         """Read an encrypted characteristic and return its decrypted payload"""
         client, cipher = self._require_session()
-        data = bytes(await client.read_gatt_char(self._characteristic(characteristic)))
+        data = bytes(
+            await client.read_gatt_char(_characteristic(client, characteristic))
+        )
         payload = packet.decode_response(cipher.decrypt(data))
         self.listeners.on_data_received(_source(characteristic), payload)
         return payload
@@ -276,7 +283,7 @@ class Connection:
         frame = cipher.encrypt(packet.encode_command(cipher.token, payload))
         self.listeners.on_data_send(_source(characteristic), payload)
         await client.write_gatt_char(
-            self._characteristic(characteristic), frame, response=True
+            _characteristic(client, characteristic), frame, response=True
         )
 
     async def send_confirmed_command(
@@ -294,7 +301,7 @@ class Connection:
         Status of the result, `packet.COMMAND_CONFIRMED` if the power board answered
         """
         client, _ = self._require_session()
-        target = self._characteristic(characteristic)
+        target = _characteristic(client, characteristic)
         result: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
 
         def on_result(_: BleakGATTCharacteristic, data: bytearray) -> None:
@@ -323,7 +330,7 @@ class Connection:
         )
         self.listeners.on_data_send(config_source(message_type), payload)
         await client.write_gatt_char(
-            self._characteristic(CONFIG_CHARACTERISTIC_UUID), frame, response=True
+            _characteristic(client, CONFIG_CHARACTERISTIC_UUID), frame, response=True
         )
 
     async def add_error(self, exception: Exception) -> None:
@@ -337,20 +344,19 @@ class Connection:
         self._set_state(ConnectionState.ERROR_TOO_MANY_ERRORS, exception)
         if self._client is not None and self._client.is_connected:
             self._logger.warning("Disconnecting after too many errors")
-            with contextlib.suppress(EOFError, BleakError):
-                await self._client.disconnect()
+            await self._disconnect_client(self._client)
 
-    async def _establish_session(self) -> None:
+    async def _establish_session(self, client: BleakClient) -> None:
         self._set_state(ConnectionState.ESTABLISHING_SESSION)
-        assert self._client is not None
 
         # passed on to data listeners only once decrypted: anyone could test guessed
         # MAC addresses against the encrypted sample
         sample = bytes(
-            await self._client.read_gatt_char(
-                self._characteristic(INFO_CHARACTERISTIC_UUID)
+            await client.read_gatt_char(
+                _characteristic(client, INFO_CHARACTERISTIC_UUID)
             )
         )
+        self._ensure_connected(client)
 
         address = int(self._address.replace(":", ""), 16)
         for base_mac in candidate_base_macs(self._address, self._base_mac_hint):
@@ -380,37 +386,31 @@ class Connection:
             "info frame"
         )
 
-    async def _subscribe(self) -> None:
+    async def _subscribe(self, client: BleakClient) -> None:
         self._set_state(ConnectionState.SUBSCRIBING)
-        assert self._client is not None
 
-        await self._client.start_notify(
-            self._characteristic(TELEMETRY_CHARACTERISTIC_UUID),
+        await client.start_notify(
+            _characteristic(client, TELEMETRY_CHARACTERISTIC_UUID),
             self._on_telemetry,
             **self._notify_kwargs(),
         )
-        await self._subscribe_config()
+        self._ensure_connected(client)
+        await self._subscribe_config(client)
+        self._ensure_connected(client)
 
-        # the link can drop while subscribing without failing the subscription, e.g.
-        # during the optional one on the configuration channel
-        if not self.is_connected:
-            raise BleakError("Disconnected while establishing the session")
-
-    async def _subscribe_config(self) -> None:
+    async def _subscribe_config(self, client: BleakClient) -> None:
         # answers to configuration requests arrive as notifications; telemetry works
         # without them, so a missing or failing subscription only disables the
         # settings that use the configuration channel. A link that dropped meanwhile
         # fails the connection in `_subscribe`.
-        if self._config_parse is None or self._client is None:
+        if self._config_parse is None:
             return
-        config = self._client.services.get_characteristic(CONFIG_CHARACTERISTIC_UUID)
+        config = client.services.get_characteristic(CONFIG_CHARACTERISTIC_UUID)
         if config is None:
             self._logger.warning("Device has no configuration characteristic")
             return
         try:
-            await self._client.start_notify(
-                config, self._on_config, **self._notify_kwargs()
-            )
+            await client.start_notify(config, self._on_config, **self._notify_kwargs())
         except BleakError as e:
             self._logger.warning("Could not subscribe to configuration messages: %s", e)
 
@@ -474,15 +474,11 @@ class Connection:
             return {"bluez": {"use_start_notify": True}}
         return {}
 
-    def _characteristic(self, uuid: str) -> BleakGATTCharacteristic:
-        assert self._client is not None
-        if (characteristic := self._client.services.get_characteristic(uuid)) is None:
-            available = [
-                f"{c.uuid} {c.properties}"
-                for c in self._client.services.characteristics.values()
-            ]
-            raise UnsupportedBluetoothProtocol(uuid, available)
-        return characteristic
+    def _ensure_connected(self, client: BleakClient) -> None:
+        # a request can succeed although the link dropped meanwhile, e.g. a
+        # subscription; `disconnected` also clears `_client` when bleak reports it
+        if self._client is not client or not client.is_connected:
+            raise BleakError("Disconnected while establishing the session")
 
     def _require_session(self) -> tuple[BleakClient, SessionCipher]:
         if self._client is None or not self._client.is_connected:
@@ -503,14 +499,31 @@ class Connection:
         self._set_state(state, exc)
         client, self._client = self._client, None
         if client is not None and client.is_connected:
-            with contextlib.suppress(EOFError, BleakError):
-                await client.disconnect()
+            await self._disconnect_client(client)
+
+    async def _disconnect_client(self, client: BleakClient) -> None:
+        # the link can be gone already, and bleak raises TimeoutError when the end of
+        # the link is not confirmed in time, from BlueZ after 10 s
+        try:
+            await client.disconnect()
+        except (EOFError, BleakError, TimeoutError) as e:
+            error = mask_identifiers(repr(e), self._address, self._base_mac_hint)
+            self._logger.debug("Disconnecting failed: %s", error)
 
     def _set_state(self, state: ConnectionState, exc: Exception | None = None) -> None:
         self._connection_state = state
         self.listeners.on_state_change(state)
         if state.is_error:
             self.listeners.on_disconnect(exc)
+
+
+def _characteristic(client: BleakClient, uuid: str) -> BleakGATTCharacteristic:
+    if (characteristic := client.services.get_characteristic(uuid)) is None:
+        available = [
+            f"{c.uuid} {c.properties}" for c in client.services.characteristics.values()
+        ]
+        raise UnsupportedBluetoothProtocol(uuid, available)
+    return characteristic
 
 
 def _is_valid_info_frame(plaintext: bytes) -> bool:

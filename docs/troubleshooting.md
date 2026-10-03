@@ -30,8 +30,8 @@ The app's cloud functions are not affected.
 To report wrong or missing values or connection problems, download the diagnostics from
 the device page right after the problem occurred and attach the file to your issue. The
 download contains the connection history and the last 200 messages exchanged with the
-UPS in each direction, about three and a half minutes of measurements. Both start over
-after a dropped connection.
+UPS in each direction, about three and a half minutes of measurements. Both are kept
+when the connection drops, until Home Assistant restarts.
 
 The download shows only the first half of the UPS's addresses, e.g. `0A:1B:2C:**:**:**`.
 It stores the exchanged data decrypted, but without the session key material and without

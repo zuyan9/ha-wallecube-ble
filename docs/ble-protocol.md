@@ -265,7 +265,11 @@ Frames in both directions are `0xA0, command, length (u16 LE), payload, CRC` wit
 CRC-16/X.25 (polynomial 0x1021 reflected, init 0xFFFF, final XOR 0xFFFF) over everything
 before the CRC. The power board answers a request with the command byte it received. It
 keeps the adapter and standby settings in its EEPROM, and the front panel reads them at
-boot.
+boot: about a second after it starts advertising, it asks once each for the versions,
+the adapter settings and the standby settings, and waits at most 500 ms for each answer.
+It reports zeros until an answer arrives, or until it restarts if the answer never came:
+power-board versions 0 in the info block, and zero blocks on reads of `0xF0B2` and
+`0xF0B4`.
 
 | Command | Payload | Front panel sends it | Meaning |
 | --- | --- | --- | --- |
@@ -491,5 +495,10 @@ exposes the versions from the info block, the event byte and the Wi-Fi status, w
 requests every minute, and both screen backlight levels as brightness, 100 minus the
 level. When no telemetry notification arrives for 60 s, it shows the telemetry values as
 unavailable until the next one. It waits for the result of adapter writes and sends an
-unconfirmed block once more; standby writes stay unconfirmed. The factory reset,
+unconfirmed block once more; standby writes stay unconfirmed. It shows adapter and
+standby blocks with a value below the power board's range as unknown and does not write
+them, and while the info block reports power-board versions 0, it reads the info block
+and both blocks again, 3 and 13 s after reading the settings. Its input over-voltage
+sensor is also on while status bit 10 is set and the output voltage is at least 2 V
+above the adapter voltage, the condition that keeps fault bit 10 set. The factory reset,
 `0xF0B7`, the last three standby values, Wake-on-LAN and Wi-Fi setup are not exposed.

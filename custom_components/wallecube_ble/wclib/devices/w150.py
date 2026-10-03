@@ -2,6 +2,7 @@ import asyncio
 import enum
 import struct
 from collections import defaultdict
+from collections.abc import Awaitable, Callable, Iterable
 from functools import cached_property
 
 from bleak.backends.device import BLEDevice
@@ -12,6 +13,7 @@ from .. import controls
 from ..connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     BUZZER_CHARACTERISTIC_UUID,
+    INFO_CHARACTERISTIC_UUID,
     LANGUAGE_CHARACTERISTIC_UUID,
     STANDBY_CHARACTERISTIC_UUID,
     TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
@@ -45,6 +47,16 @@ info = dataclass_attr_mapper(InfoBlock)
 # set while the output is powered from the battery, the firmware only shows the
 # remaining time in that state
 _on_battery = prop_has_bit_on(8)
+# status flag, set while the input is above the power-good threshold
+_input_power = prop_has_bit_on(10)
+# fault flag of the power board's over-voltage protection
+_over_voltage = prop_has_bit_on(10)
+
+# The power board latches its over-voltage flag only when its output comparator trips
+# in the same interrupt as an input-power change, but it keeps the flag while the
+# output is at least this many mV above the adapter voltage. On input power the output
+# follows the input.
+_OVER_VOLTAGE_MARGIN = 2000
 
 # remaining time the power board reports when it has no load to estimate from, and
 # when its battery monitor missed a sample
@@ -52,6 +64,16 @@ _RUNTIME_UNKNOWN = (0xFFFF, 0)
 
 # first power-board firmware version that accepts standby thresholds above 2000 mA
 _STANDBY_CURRENT_3000MA_FIRMWARE = 29
+
+# lowest values the power board accepts; the front panel reports zeros instead until
+# it got the settings from the power board, see `Device.refresh_settings`
+_MIN_ADAPTER_MA = 1000
+_MIN_ADAPTER_MV = 5000
+_MIN_STANDBY_VALUE = 20  # s and mA
+
+# seconds to wait before each new read of the values the front panel gets from the
+# power board, while it reports none
+_POWER_BOARD_REREAD_DELAYS = (3, 10)
 
 # models by power-board hardware version. The models share the front-panel firmware
 # and differ only in the power board, which reports the model in the info block.
@@ -161,14 +183,15 @@ class Device(DeviceBase, RawDataProps):
     shutdown_imminent = raw_field(tele.status_flags, prop_has_bit_on(4))
     charging = raw_field(tele.status_flags, prop_has_bit_on(7))
     discharging = raw_field(tele.status_flags, _on_battery)
-    input_power_ok = raw_field(tele.status_flags, prop_has_bit_on(10))
+    input_power_ok = raw_field(tele.status_flags, _input_power)
     # the vendor app ignores these conditions, they follow the power-board firmware
     over_temperature = raw_field(tele.status_flags, prop_has_bit_on(3))
     # cell under- or over-voltage, discharge over-current or short circuit, or a
     # failure of the battery monitor chip
     battery_fault = raw_field(tele.fault_flags, prop_has_any_bit_on(0, 1, 3, 4, 5, 6))
     under_temperature = raw_field(tele.fault_flags, prop_has_bit_on(9))
-    input_over_voltage = raw_field(tele.fault_flags, prop_has_bit_on(10))
+    # the power board rarely sets its flag, see `_input_over_voltage`
+    input_over_voltage = Field[bool]()
     output_over_current = raw_field(tele.fault_flags, prop_has_bit_on(11))
 
     output_power = Field[float]()
@@ -206,6 +229,7 @@ class Device(DeviceBase, RawDataProps):
     screen_idle_brightness = Field[int]()
 
     _warned_truncated = False
+    _warned_power_board = False
     _last_screen_timeout = DEFAULT_SCREEN_TIMEOUT
     # as reported, including the value for "keep screen on"
     _raw_screen_timeout: int | None = None
@@ -236,6 +260,7 @@ class Device(DeviceBase, RawDataProps):
             Device.remaining_time_discharging,
             Device.cell_voltage_difference,
             Device.battery_health,
+            Device.input_over_voltage,
         )
         mapped = self._datatype_to_field.get(UpsTelemetry, [])
         return frozenset(field.public_name for field in (*mapped, *derived))
@@ -283,6 +308,7 @@ class Device(DeviceBase, RawDataProps):
             max(cells) - min(cells) if None not in cells else None
         )
         self.battery_health = _battery_health(telemetry.battery_cycles)
+        self.input_over_voltage = _input_over_voltage(telemetry, self.adapter_voltage)
 
         self.remaining_time_discharging = (
             round(telemetry.remaining_time / 60)
@@ -372,6 +398,31 @@ class Device(DeviceBase, RawDataProps):
             self._request_screen_brightness,
             self._request_wifi_status,
         )
+        if not await self._read_settings(readers):
+            return
+
+        # The front panel asks the power board for its versions and then for its
+        # settings once, about a second after it starts advertising, and reports zeros
+        # until it has the answers, or until it restarts if they did not come. A
+        # connection right after the start can read too early.
+        for delay in _POWER_BOARD_REREAD_DELAYS:
+            if self.power_board_hardware_version is not None:
+                return
+            await asyncio.sleep(delay)
+            readers = (self._read_info, self._read_adapter, self._read_standby)
+            if not await self._read_settings(readers):
+                return
+        if self.power_board_hardware_version is None and not self._warned_power_board:
+            self._warned_power_board = True
+            self._logger.warning(
+                "The UPS did not get the versions of its power board when it started, "
+                "they stay unknown until it restarts"
+            )
+
+    async def _read_settings(
+        self, readers: Iterable[Callable[[], Awaitable[None]]]
+    ) -> bool:
+        """Call each reader, return False if the connection was lost"""
         for read in readers:
             # a single read can fail, the others are still usable
             try:
@@ -381,8 +432,9 @@ class Device(DeviceBase, RawDataProps):
             except (BleakError, TimeoutError) as e:
                 if not self.is_connected:
                     self._logger.debug("Connection lost while reading settings")
-                    return
+                    return False
                 self._logger.warning("Could not read setting: %s", e)
+        return True
 
     async def poll(self) -> None:
         await self._request_wifi_status()
@@ -465,7 +517,9 @@ class Device(DeviceBase, RawDataProps):
             voltage = voltage if voltage is not None else self.adapter_voltage
             current = current if current is not None else self.adapter_current
             if voltage is None or current is None:
-                raise SettingUnavailable("Current adapter settings could not be read")
+                raise SettingUnavailable(
+                    "The UPS did not get the adapter settings from its power board"
+                )
 
             settings = AdapterSettings.from_adapter(voltage, current)
             # the front panel keeps the written block and reports it on reads even when
@@ -488,7 +542,9 @@ class Device(DeviceBase, RawDataProps):
                 else self.standby_current_threshold
             )
             if time is None or current_threshold is None:
-                raise SettingUnavailable("Current standby settings could not be read")
+                raise SettingUnavailable(
+                    "The UPS did not get the sleep settings from its power board"
+                )
 
             settings = StandbySettings(time=time, current_threshold=current_threshold)
             # unconfirmed: the device notifies the result like for the adapter
@@ -537,20 +593,30 @@ class Device(DeviceBase, RawDataProps):
             f"The UPS power board did not confirm the {description}"
         )
 
+    async def _read_info(self) -> None:
+        self.info_parse(await self.read_value(INFO_CHARACTERISTIC_UUID))
+
     async def _read_adapter(self) -> None:
         settings = AdapterSettings.from_bytes(
             await self.read_value(ADAPTER_CHARACTERISTIC_UUID)
         )
-        self.adapter_voltage = _scaled(settings.adapter_voltage, 1000)
-        self.adapter_current = _scaled(settings.adapter_current, 1000)
+        voltage, current = settings.adapter_voltage, settings.adapter_current
+        # written as a block, so one missing value makes the block unknown
+        if (voltage or 0) < _MIN_ADAPTER_MV or (current or 0) < _MIN_ADAPTER_MA:
+            voltage = current = None
+        self.adapter_voltage = _scaled(voltage, 1000)
+        self.adapter_current = _scaled(current, 1000)
         self._publish_updates()
 
     async def _read_standby(self) -> None:
         settings = StandbySettings.from_bytes(
             await self.read_value(STANDBY_CHARACTERISTIC_UUID)
         )
-        self.standby_time = settings.time
-        self.standby_current_threshold = settings.current_threshold
+        time, threshold = settings.time, settings.current_threshold
+        if (time or 0) < _MIN_STANDBY_VALUE or (threshold or 0) < _MIN_STANDBY_VALUE:
+            time = threshold = None
+        self.standby_time = time
+        self.standby_current_threshold = threshold
         self._publish_updates()
 
     async def _read_temperature_unit(self) -> None:
@@ -623,6 +689,21 @@ def _battery_health(cycles: int | None) -> float | None:
     if cycles is None:
         return None
     return round(max(0.0, min(100.0, (1500 - cycles) / 14)), 1)
+
+
+def _input_over_voltage(
+    telemetry: UpsTelemetry, adapter_voltage: float | None
+) -> bool | None:
+    # the power board's flag, or the condition that keeps it set
+    if telemetry.fault_flags is None or telemetry.status_flags is None:
+        return None
+    if _over_voltage(telemetry.fault_flags):
+        return True
+    output = telemetry.dc_output_voltage
+    if adapter_voltage is None or output is None:
+        return False
+    threshold = round(adapter_voltage * 1000) + _OVER_VOLTAGE_MARGIN
+    return bool(_input_power(telemetry.status_flags)) and output >= threshold
 
 
 def _power_event(value: int) -> PowerEvent | None:

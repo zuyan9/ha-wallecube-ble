@@ -79,6 +79,17 @@ class DeviceDiagnosticsCollector:
         listeners.on_data_received.add(self._on_data_received)
         listeners.on_data_send.add(self._on_data_send)
 
+    def continue_from(self, earlier: "DeviceDiagnosticsCollector") -> None:
+        """
+        Keep what the collector of an earlier object for the device collected
+
+        Call it before the new object connects, the times continue those of `earlier`.
+        """
+        self._start = earlier._start
+        self._history.extend(earlier._history)
+        self._frames_received.extend(earlier._frames_received)
+        self._frames_sent.extend(earlier._frames_sent)
+
     def build_diagnostics_dict(self) -> dict[str, Any]:
         """Assemble diagnostics with device identifiers masked"""
         device = self._device

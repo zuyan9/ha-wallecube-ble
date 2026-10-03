@@ -35,6 +35,7 @@ from tests.fakes import (
     encrypted,
     notify_handler,
     telemetry_frame,
+    ups_client,
 )
 
 
@@ -68,9 +69,14 @@ async def test_connect_establishes_the_session(establish, client, from_name: boo
     assert client.start_notify.await_args.args[0].uuid == TELEMETRY_CHARACTERISTIC_UUID
 
 
-async def test_wrong_key_fails_authentication(establish, client):
+# bleak raises TimeoutError when BlueZ does not confirm the end of the link in time
+@pytest.mark.parametrize("disconnect_error", [None, TimeoutError()])
+async def test_wrong_key_fails_authentication(
+    establish, client, disconnect_error: Exception | None
+):
     wrong_key = SessionCipher(derive_session_key(bytes.fromhex("aabbccddeeff")))
     client.read_gatt_char.return_value = encrypted(b"\x51" + W150_INFO, wrong_key)
+    client.disconnect.side_effect = disconnect_error
     conn = make_connection()
     disconnects = MagicMock()
     received = MagicMock()
@@ -211,6 +217,39 @@ async def test_disconnect_is_not_reported_as_a_lost_link(establish, client):
     assert conn.state is ConnectionState.DISCONNECTED
     client.disconnect.assert_awaited_once()
     disconnects.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [BleakError("failed"), EOFError(), TimeoutError()])
+async def test_disconnect_ends_the_connection_when_bleak_fails(
+    establish, client, error: Exception
+):
+    conn = make_connection()
+    await conn.connect()
+    client.disconnect.side_effect = error
+
+    await conn.disconnect()
+
+    assert conn.state is ConnectionState.DISCONNECTED
+
+
+async def test_late_report_of_an_ended_link_is_ignored(establish, client, caplog):
+    conn = make_connection()
+    disconnects = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
+    await conn.connect()
+    # BlueZ did not confirm the end of the link in time
+    client.disconnect.side_effect = TimeoutError
+    await conn.disconnect()
+    establish.return_value = ups_client()
+    await conn.connect()
+
+    # and reports it while the next link is up
+    drop_link(establish, client)
+
+    assert conn.state is ConnectionState.AUTHENTICATED
+    assert conn.is_connected
+    disconnects.assert_not_called()
+    assert "Disconnected from device" not in caplog.text
 
 
 async def test_lost_link_is_reported_without_an_error(establish, client):
@@ -377,11 +416,48 @@ async def test_disconnect_while_subscribing_fails_the_connection(
 
     client.start_notify.side_effect = start_notify
     conn = make_connection(config_parse=AsyncMock())
+    disconnects = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
 
     with pytest.raises(BleakError):
         await conn.connect()
 
     assert conn.state is ConnectionState.ERROR_BLEAK
+    # reported once, by the failed connect
+    disconnects.assert_called_once()
+
+
+@pytest.mark.parametrize("read_fails", [True, False])
+# a client can report the end of the link before it stops reporting it is connected
+@pytest.mark.parametrize("still_connected", [False, True])
+async def test_disconnect_while_reading_the_info_fails_the_connection(
+    establish, client, read_fails: bool, still_connected: bool
+):
+    info = client.read_gatt_char.return_value
+
+    async def read_gatt_char(characteristic):
+        # bleak reports the dropped link while the read is pending
+        drop_link(establish, client)
+        client.is_connected = still_connected
+        if read_fails:
+            raise BleakError("Not connected")
+        return info
+
+    client.read_gatt_char.side_effect = read_gatt_char
+    conn = make_connection()
+    disconnects = MagicMock()
+    conn.listeners.on_disconnect.add(disconnects)
+
+    with pytest.raises(BleakError):
+        await conn.connect()
+
+    assert conn.state is ConnectionState.ERROR_BLEAK
+    disconnects.assert_called_once()
+    assert isinstance(disconnects.call_args.args[0], BleakError)
+    # nothing of the lost link keeps the next attempt from connecting
+    establish.return_value = ups_client()
+    await conn.connect()
+    assert conn.state is ConnectionState.AUTHENTICATED
 
 
 async def test_only_the_first_failure_in_a_row_is_a_warning(establish, client, caplog):
