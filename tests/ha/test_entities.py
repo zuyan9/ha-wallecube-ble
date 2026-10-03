@@ -9,10 +9,11 @@ import pytest
 
 pytest.importorskip("homeassistant.components.bluetooth")
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 
 from homeassistant.components.number import NumberMode
 from homeassistant.const import PERCENTAGE
+from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.binary_sensor import WalleCubeBinarySensor
 from custom_components.wallecube_ble.event import EVENT_TYPES, WalleCubeEvent
@@ -97,6 +98,39 @@ async def test_updates_after_subscription_reach_the_entity(device: Device):
 
     assert number.native_value == 120
     number.async_write_ha_state.assert_called_once()
+
+
+async def test_telemetry_entities_are_unavailable_while_telemetry_is_stale(
+    device: Device, mocker: MockerFixture
+):
+    mocker.patch.object(
+        Device, "is_connected", new_callable=PropertyMock, return_value=True
+    )
+    level = WalleCubeSensor(device, "battery_level")
+    charging = WalleCubeBinarySensor(device, "charging")
+    standby = WalleCubeNumber(
+        device, describe_number(control(device, controls.NumberType, "standby_time"))
+    )
+    event = WalleCubeEvent(device, "power_event")
+    entities = (level, charging, standby, event)
+    for entity in entities:
+        entity.async_write_ha_state = MagicMock()
+        await entity.async_added_to_hass()
+    await device._on_data(b"\x51\x00" + bytes(38))
+    level.async_write_ha_state.reset_mock()
+    charging.async_write_ha_state.reset_mock()
+
+    device._check_data(device._last_data + 60)
+
+    # settings stay usable, and the event keeps its last state
+    assert [entity.available for entity in entities] == [False, False, True, True]
+    level.async_write_ha_state.assert_called_once()
+    charging.async_write_ha_state.assert_called_once()
+
+    await device._on_data(b"\x51\x00" + bytes(38))
+
+    assert all(entity.available for entity in entities)
+    assert level.async_write_ha_state.call_count == 2
 
 
 def test_power_event_types_match_the_device_events():

@@ -251,6 +251,60 @@ async def test_state_update_callback_receives_value(
     state_callback.assert_called_once_with(100.0)
 
 
+def test_data_fields_are_the_values_from_telemetry(device: Device):
+    assert {
+        "battery_level",
+        "input_power_ok",
+        "battery_fault",
+        "output_power",
+        "remaining_time_discharging",
+    } <= device.data_fields
+    # settings, versions and Wi-Fi come from elsewhere, the event only lasts a frame
+    assert not device.data_fields & {
+        "standby_time",
+        "firmware_version",
+        "wifi_rssi",
+        "power_event",
+    }
+
+
+async def test_telemetry_values_go_stale_without_frames(
+    device: Device, mocker: MockerFixture
+):
+    await device._on_data(telemetry_frame())
+    level = mocker.Mock()
+    charging = mocker.Mock()
+    standby = mocker.Mock()
+    device.register_callback(level, "battery_level")
+    device.register_state_update_callback(charging, "charging")
+    device.register_state_update_callback(standby, "standby_time")
+
+    assert device._check_data(device._last_data + 59) == pytest.approx(1)
+    assert device.data_current
+
+    device._check_data(device._last_data + 60)
+
+    assert not device.data_current
+    level.assert_called_once()
+    charging.assert_called_once_with(False)
+    standby.assert_not_called()
+
+
+async def test_next_frame_makes_stale_values_current_again(
+    device: Device, mocker: MockerFixture
+):
+    await device._on_data(telemetry_frame())
+    device._check_data(device._last_data + 60)
+    level = mocker.Mock()
+    device.register_callback(level, "battery_level")
+
+    # the same values as before the gap, they are published nonetheless
+    await device._on_data(telemetry_frame())
+
+    assert device.data_current
+    level.assert_called_once()
+
+
 async def test_decodes_truncated_frame_partially(device: Device):
     # default ATT MTU limits notifications to 20 bytes
     await device.data_parse(telemetry_frame()[:20])
@@ -447,6 +501,26 @@ async def test_polls_wifi_status_while_connected(
     assert task is not None
     assert task.cancelled() or task.cancelling()
     assert device._poll_task is None
+
+
+async def test_watches_telemetry_while_connected(
+    device: Device, client, mocker: MockerFixture
+):
+    mocker.patch.object(device, "refresh_settings", new=AsyncMock())
+    mocker.patch.object(Device, "DATA_TIMEOUT", 0.01)
+    stale = asyncio.Event()
+    device.register_state_update_callback(lambda _: stale.set(), "charging")
+
+    # no telemetry arrives after connecting
+    await device.with_disabled_reconnect().connect()
+    await asyncio.wait_for(stale.wait(), 1)
+    task = device._data_task
+    await device.disconnect()
+
+    assert not device.data_current
+    assert task is not None
+    assert task.cancelled() or task.cancelling()
+    assert device._data_task is None
 
 
 async def test_new_session_replaces_pending_settings_refresh(

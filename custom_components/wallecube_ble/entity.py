@@ -57,8 +57,13 @@ class WalleCubeEntity(Entity):
 
     @property
     def available(self) -> bool:
-        """Return True if device is connected"""
-        return self._device.is_connected
+        """Return True if the device is connected and the value is current"""
+        if not self._device.is_connected:
+            return False
+        return (
+            self._device.data_current
+            or self.entity_description.key not in self._device.data_fields
+        )
 
     class SkipWrite:
         """Sentinel value for skipping write in update callback"""

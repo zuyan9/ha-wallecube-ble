@@ -77,6 +77,11 @@ reserve: it reaches 0 % at that point, and Shutdown Imminent turns on at about 8
 With older firmware, the output turns off at about 18 % and Shutdown Imminent turns on
 at 25 %.
 
+The UPS sends its measurements about once a second. When none arrive for a minute, for
+example while the UPS has turned its output off on battery or updates its firmware, the
+measured values and status sensors show as unavailable until they resume. The settings
+stay available.
+
 Cell 1–4 Voltage, Max Voltage Difference, Battery Health and Number of Cycles are the
 values of the vendor app's battery health page. The UPS counts full charge cycles but
 does not report a health value: the integration estimates it from the number of cycles

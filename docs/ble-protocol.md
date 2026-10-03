@@ -135,10 +135,11 @@ partially and encrypted replies longer than one block are lost.
 ## Telemetry
 
 `0xF0B1` notifications are plaintext **40-byte** frames. The power board measures the
-UPS and builds a 38-byte block, which it sends to the front panel about once a second
-while it runs and whenever the front panel asks for it. The front panel forwards the
-block unchanged, prefixed with the magic byte `0x51` and an event byte. All fields are
-little-endian.
+UPS and builds a 38-byte block, which it sends to the front panel on its own about once
+a second while it runs, but not while it sleeps with the output off, has shut down or
+updates its firmware. The front panel asks for a block only when `0xF0B5` is written.
+It forwards the block unchanged, prefixed with the magic byte `0x51` and an event byte.
+All fields are little-endian.
 
 | Frame offset | Payload offset | Type | Field | Unit |
 | --- | --- | --- | --- | --- |
@@ -268,7 +269,7 @@ boot.
 
 | Command | Payload | Front panel sends it | Meaning |
 | --- | --- | --- | --- |
-| `0x01` | - | periodically and on a write to `0xF0B5` | telemetry block, which the power board also sends on its own |
+| `0x01` | - | on a write to `0xF0B5` | telemetry block, which the power board also sends on its own while it runs |
 | `0x03`, `0x13` | 5 × u16 | at boot, on a write to `0xF0B2` | read and write the adapter settings |
 | `0x07`, `0x17` | 5 × u16 | at boot, on a write to `0xF0B4` | read and write the standby settings |
 | `0x0A` | - | at boot | versions, see the info block |
@@ -488,6 +489,7 @@ The integration exposes the settings of the vendor app's advanced configuration 
 adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
 exposes the versions from the info block, the event byte and the Wi-Fi status, which it
 requests every minute, and both screen backlight levels as brightness, 100 minus the
-level. It waits for the result of adapter writes and sends an unconfirmed block once
-more; standby writes stay unconfirmed. The factory reset, `0xF0B7`, the last three
-standby values, Wake-on-LAN and Wi-Fi setup are not exposed.
+level. When no telemetry notification arrives for 60 s, it shows the telemetry values as
+unavailable until the next one. It waits for the result of adapter writes and sends an
+unconfirmed block once more; standby writes stay unconfirmed. The factory reset,
+`0xF0B7`, the last three standby values, Wake-on-LAN and Wi-Fi setup are not exposed.

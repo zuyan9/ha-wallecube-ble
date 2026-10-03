@@ -2,6 +2,7 @@ import asyncio
 import enum
 import struct
 from collections import defaultdict
+from functools import cached_property
 
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
@@ -130,6 +131,9 @@ class Device(DeviceBase, RawDataProps):
 
     # the device reports Wi-Fi changes only when asked
     POLL_INTERVAL = 60
+    # the power board pushes telemetry about once a second while it runs, and none
+    # while it sleeps with the output off, has shut down or updates its firmware
+    DATA_TIMEOUT = 60
 
     battery_level = raw_field(tele.battery_level, pdiv(10, 1))
     battery_voltage = raw_field(tele.battery_voltage, pdiv(1000, 3))
@@ -221,6 +225,19 @@ class Device(DeviceBase, RawDataProps):
             local_name.startswith(LOCAL_NAME_PREFIX)
             or UPS_SERVICE_UUID in adv_data.service_uuids
         )
+
+    @cached_property
+    def data_fields(self) -> frozenset[str]:
+        # the derived values come from telemetry too; the power event is left out, it
+        # only lasts for the frame that carries it
+        derived = (
+            Device.output_power,
+            Device.remaining_time_discharging,
+            Device.cell_voltage_difference,
+            Device.battery_health,
+        )
+        mapped = self._datatype_to_field.get(UpsTelemetry, [])
+        return frozenset(field.public_name for field in (*mapped, *derived))
 
     @property
     def NAME_PREFIX(self) -> str:

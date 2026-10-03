@@ -45,6 +45,9 @@ class DeviceBase(abc.ABC):
     NAME_PREFIX: str
     # seconds between calls of `poll` while connected, None disables polling
     POLL_INTERVAL: ClassVar[float | None] = None
+    # seconds without a data frame after which the values from data frames are stale,
+    # see `data_current`, None disables the check
+    DATA_TIMEOUT: ClassVar[float | None] = None
 
     _listeners = _Listeners.create()
 
@@ -80,6 +83,9 @@ class DeviceBase(abc.ABC):
         self._reconnect_disabled = False
         self._refresh_task: asyncio.Task | None = None
         self._poll_task: asyncio.Task | None = None
+        self._data_task: asyncio.Task | None = None
+        self._last_data = 0.0
+        self._data_current = True
         self._options = Connection.Options()
         self._connection_log = ConnectionLog()
         self._diagnostics = DeviceDiagnosticsCollector(self)
@@ -124,6 +130,21 @@ class DeviceBase(abc.ABC):
     def base_mac_hint(self) -> bytes | None:
         """Factory MAC parsed from the advertised name, if it was available"""
         return self._base_mac_hint
+
+    @property
+    def data_fields(self) -> frozenset[str]:
+        """Names of the fields filled from data frames"""
+        return frozenset()
+
+    @property
+    def data_current(self) -> bool:
+        """
+        False while data frames are overdue
+
+        The values of `data_fields` are then stale. The next frame makes them current
+        again.
+        """
+        return self._data_current
 
     def has_characteristic(self, uuid: str) -> bool:
         """
@@ -220,7 +241,7 @@ class DeviceBase(abc.ABC):
             self._conn = (
                 Connection(
                     ble_dev=self._ble_dev,
-                    data_parse=self.data_parse,
+                    data_parse=self._on_data,
                     base_mac_hint=self._base_mac_hint,
                     config_parse=self.config_parse,
                 )
@@ -307,13 +328,54 @@ class DeviceBase(abc.ABC):
         self._refresh_task = loop.create_task(self._refresh_settings())
         if self.POLL_INTERVAL is not None:
             self._poll_task = loop.create_task(self._poll_periodically())
+        if self.DATA_TIMEOUT is not None:
+            # the first frame is due within the timeout as well
+            self._last_data = time.monotonic()
+            self._data_task = loop.create_task(self._watch_data())
 
     def _cancel_session_tasks(self) -> None:
-        for task in (self._refresh_task, self._poll_task):
+        for task in (self._refresh_task, self._poll_task, self._data_task):
             if task is not None:
                 task.cancel()
         self._refresh_task = None
         self._poll_task = None
+        self._data_task = None
+
+    async def _on_data(self, frame: bytes) -> bool:
+        processed = await self.data_parse(frame)
+        if processed:
+            self._last_data = time.monotonic()
+            if not self._data_current:
+                self._data_current = True
+                self._logger.info("Receiving data again")
+                self._write_data_fields()
+        return processed
+
+    async def _watch_data(self) -> None:
+        while True:
+            await asyncio.sleep(self._check_data(time.monotonic()))
+
+    def _check_data(self, now: float) -> float:
+        """Mark the data stale once a frame is overdue, return the time to wait"""
+        assert self.DATA_TIMEOUT is not None
+        if (overdue := now - self._last_data - self.DATA_TIMEOUT) < 0:
+            return -overdue
+        if self._data_current:
+            self._data_current = False
+            self._logger.warning(
+                "No data received for %d seconds, the values are stale until it resumes",
+                self.DATA_TIMEOUT,
+            )
+            self._write_data_fields()
+        return self.DATA_TIMEOUT
+
+    def _write_data_fields(self) -> None:
+        # their availability changed, so every value is published, also unchanged
+        # ones, and right away instead of after the update period
+        for name in self.data_fields:
+            for callback in self._callbacks_map.get(name, ()):
+                callback()
+            self.update_state(name, getattr(self, name, None))
 
     async def _refresh_settings(self) -> None:
         try:
