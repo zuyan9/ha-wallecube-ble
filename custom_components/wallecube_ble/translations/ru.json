@@ -236,6 +236,9 @@
       "battery_current": {
         "name": "Ток батареи"
       },
+      "battery_power": {
+        "name": "Мощность батареи"
+      },
       "dc_input_voltage": {
         "name": "Входное напряжение"
       },

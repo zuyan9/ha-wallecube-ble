@@ -55,7 +55,9 @@ class WalleCubeEntity(Entity):
             manufacturer=MANUFACTURER,
             model=self._device.device,
             # versions of the front panel, the power board has its own sensors
-            sw_version=_version(getattr(self._device, "firmware_version", None)),
+            sw_version=firmware_version(
+                getattr(self._device, "firmware_version", None)
+            ),
             hw_version=_version(getattr(self._device, "hardware_version", None)),
         )
 
@@ -98,6 +100,11 @@ class WalleCubeEntity(Entity):
     @callback
     def _on_update(self) -> None:
         self.async_write_ha_state()
+
+
+def firmware_version(value: int | None) -> str | None:
+    """Firmware version as the vendor app shows it, 1.19 for the reported 19"""
+    return None if value is None else f"1.{value:02d}"
 
 
 def _version(value: int | None) -> str | None:

@@ -13,8 +13,9 @@ The analysis covers front-panel firmware 1.16 to 1.20 (builds v1.0-25 to v1.0-47
 power-board firmware 1.21, 1.27 and 1.29 of the W150 and power-board firmware 1.25, 1.28
 and 1.29 (two builds) of the W180. All front-panel versions implement the protocol below
 identically, except that the temperature unit characteristic `0xF0B9` only exists from
-1.18 on. All power-board versions fill the telemetry block with the same layout; where
-their behavior differs, the text says so. The info characteristic reports both versions,
+1.18 on and that 1.20 resets the UPS on a write to `0xF0B5`; smaller differences are
+noted where they matter. All power-board versions fill the telemetry block with the same
+layout; where their behavior differs, the text says so. The info characteristic reports both versions,
 see [Controls](#ups-service).
 
 Both models run the same front-panel firmware, which contains no model-specific code.
@@ -55,7 +56,7 @@ Custom **UPS** service `0xF0A1`:
 | `0xF0B2` | Read, Write, Notify | Power-adapter settings; notifies the write result |
 | `0xF0B3` | Read, Write | Buzzer mode |
 | `0xF0B4` | Read, Write | Standby settings |
-| `0xF0B5` | Write | Telemetry refresh (see [Controls](#controls)) |
+| `0xF0B5` | Write | Telemetry refresh, factory reset from front-panel firmware 1.20 (see [Controls](#controls)) |
 | `0xF0B6` | Write | Factory reset |
 | `0xF0B7` | Read, Write, Notify | USB wake-up setting of the power board |
 | `0xF0B8` | Read, Write | Screen language |
@@ -137,8 +138,9 @@ partially and encrypted replies longer than one block are lost.
 `0xF0B1` notifications are plaintext **40-byte** frames. The power board measures the
 UPS and builds a 38-byte block, which it sends to the front panel on its own about once
 a second while it runs, but not while it sleeps with the output off, has shut down or
-updates its firmware. The front panel asks for a block only when `0xF0B5` is written.
-It forwards the block unchanged, prefixed with the magic byte `0x51` and an event byte.
+updates its firmware. Up to front-panel firmware 1.19, the front panel asks for a block
+only when `0xF0B5` is written; 1.20 resets the UPS on that write instead. It forwards the
+block unchanged, prefixed with the magic byte `0x51` and an event byte.
 All fields are little-endian.
 
 | Frame offset | Payload offset | Type | Field | Unit |
@@ -290,12 +292,12 @@ power-board versions 0 in the info block, and zero blocks on reads of `0xF0B2` a
 
 | Command | Payload | Front panel sends it | Meaning |
 | --- | --- | --- | --- |
-| `0x01` | - | on a write to `0xF0B5` | telemetry block, which the power board also sends on its own while it runs |
+| `0x01` | - | on a write to `0xF0B5`, before front-panel firmware 1.20 | telemetry block, which the power board also sends on its own while it runs |
 | `0x03`, `0x13` | 5 × u16 | at boot, on a write to `0xF0B2` | read and write the adapter settings |
 | `0x07`, `0x17` | 5 × u16 | at boot, on a write to `0xF0B4` | read and write the standby settings |
 | `0x0A` | - | at boot | versions, see the info block |
 | `0x18` | u8 | on a write to `0xF0B7` | USB wake-up setting |
-| `0x20` | magic `0x5A1B0671` | on a write to `0xF0B6` | restore the defaults |
+| `0x20` | magic `0x5A1B0671` | on a write to `0xF0B6`, from front-panel firmware 1.20 also to `0xF0B5` | restore the defaults |
 | `0x21` | 6 bytes | at boot | the front panel's MAC |
 | `0x22` | magic `0x5A1B0672` | on request of the vendor cloud | restart the power board |
 | `0x80`-`0x85` | - | during a firmware update from the vendor cloud | update the power board |
@@ -408,14 +410,18 @@ though that characteristic does not declare Notify. Clients such as BlueZ do not
 notifications of a characteristic without that property, so this result cannot be
 received.
 
-**`0xF0B5` and `0xF0B6`**: the vendor app's "Restore System Settings" action writes
-`0xF0B5`. In every analyzed front-panel version, `0xF0B5` only requests a fresh
-telemetry sample, so the action has no effect. The factory reset is on `0xF0B6`:
+**`0xF0B5` and `0xF0B6`**: up to front-panel firmware 1.19, a write to `0xF0B5` only
+requests a fresh telemetry sample, and `0xF0B6` is the factory reset:
 
 - The power board restores its defaults listed here, which fit a 12 V adapter, and sets
   the cycle count to 0. Power-board firmware 1.29 then restarts.
 - The front panel restores its defaults listed here, including the screen settings, and
   clears the Wake-on-LAN list. It keeps the Wi-Fi credentials and does not restart.
+
+Front-panel firmware 1.20 resets the UPS on a write to either characteristic. The front
+panel then also replaces the stored Wi-Fi network with a factory default and restarts.
+The vendor app's "Restore System Settings" action writes `0xF0B5`, so it has no effect
+before 1.20 and resets the UPS from 1.20 on.
 
 With another adapter, the adapter settings have to be entered again after a reset.
 
@@ -439,9 +445,9 @@ and power-board firmware 1.21 does not know the command.
 
 The front panel asks the power board for its two versions over UART (command `0x0A`) at
 boot and reports 0 for both if it gets no answer. It sends the same four values to the
-vendor cloud, which lists them as UPS and system hardware and software versions. The
-vendor app shows the cloud's version strings, e.g. `1.19` for front-panel firmware 19, so
-they do not match the raw numbers.
+vendor cloud, which lists them as UPS and system hardware and software versions and
+formats them for the vendor app: a software version as `1.` and two digits, e.g. `1.19`
+for front-panel firmware 19, and hardware version 3 as `0.03`.
 
 ### Configuration service
 
@@ -513,18 +519,19 @@ manage the targets but not the trigger.
 
 The integration exposes the settings of the vendor app's advanced configuration page:
 adapter, standby, screen timeout, temperature unit, screen language and buzzer. It also
-exposes the versions from the info block, the event byte and the Wi-Fi status, which it
-requests every minute, both screen backlight levels as brightness, 100 minus the level,
-and the Wake-on-LAN trigger. It reports the remaining time until the output turns off
-instead of until the battery is empty: it scales payload offset 26 by the share of the
-charge above the cut-off, assuming the default reserve, and reports none while the
-power-board version is unknown. When no telemetry notification arrives for 60 s, it
-shows the telemetry values as unavailable until the next one. It waits for the result of
-adapter writes and sends an unconfirmed block once more; standby writes stay
-unconfirmed. It shows adapter and standby blocks with a value below the power board's
-range as unknown and does not write them, and while the info block reports power-board
-versions 0, it reads the info block and both blocks again, 3 and 13 s after reading the
-settings. Its input over-voltage sensor is also on while status bit 10 is set and the
-output voltage is at least 2 V above the adapter voltage, the condition that keeps fault
-bit 10 set. The factory reset, `0xF0B7`, the last three standby values, the Wake-on-LAN
-targets and Wi-Fi setup are not exposed.
+exposes the versions from the info block, the firmware versions formatted as in the
+vendor app, the event byte and the Wi-Fi status, which it requests every minute, both
+screen backlight levels as brightness, 100 minus the level, and the Wake-on-LAN trigger.
+It reports the remaining time until the output turns off instead of until the battery is
+empty: it scales payload offset 26 by the share of the charge above the cut-off,
+assuming the default reserve, and reports none while the power-board version is unknown.
+When no telemetry notification arrives for 60 s, it shows the telemetry values as
+unavailable until the next one. It waits for the result of adapter writes and sends an
+unconfirmed block once more; standby writes stay unconfirmed. It shows adapter and
+standby blocks with a value below the power board's range as unknown and does not write
+them, and while the info block reports power-board versions 0, it reads the info block
+and both blocks again, 3 and 13 s after reading the settings. Its input over-voltage
+sensor is also on while status bit 10 is set and the output voltage is at least 2 V
+above the adapter voltage, the condition that keeps fault bit 10 set. The factory reset,
+`0xF0B7`, the last three standby values, the Wake-on-LAN targets and Wi-Fi setup are not
+exposed.

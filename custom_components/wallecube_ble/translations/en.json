@@ -236,6 +236,9 @@
       "battery_current": {
         "name": "Battery Current"
       },
+      "battery_power": {
+        "name": "Battery Power"
+      },
       "dc_input_voltage": {
         "name": "DC Input Voltage"
       },

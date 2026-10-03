@@ -1,5 +1,7 @@
 """WalleCube BLE sensor"""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Final
 
 from homeassistant.components.sensor import (
@@ -23,7 +25,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DeviceConfigEntry
-from .entity import WalleCubeEntity
+from .entity import WalleCubeEntity, firmware_version
+
+
+@dataclass(frozen=True, kw_only=True)
+class WalleCubeSensorEntityDescription(SensorEntityDescription):
+    # turns the device value into the state
+    value_fn: Callable[[Any], Any] | None = None
 
 
 def _measurement(
@@ -44,12 +52,18 @@ def _measurement(
     )
 
 
-def _diagnostic(key: str, *, enabled: bool = True) -> SensorEntityDescription:
+def _diagnostic(
+    key: str,
+    *,
+    enabled: bool = True,
+    value_fn: Callable[[Any], Any] | None = None,
+) -> SensorEntityDescription:
     """Text value such as a version or a network name"""
-    return SensorEntityDescription(
+    return WalleCubeSensorEntityDescription(
         key=key,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=enabled,
+        value_fn=value_fn,
     )
 
 
@@ -78,6 +92,9 @@ SENSOR_TYPES: Final[dict[str, SensorEntityDescription]] = {
             precision=0,
         ),
         _measurement("battery_current", *_AMPERES, precision=2),
+        _measurement(
+            "battery_power", SensorDeviceClass.POWER, UnitOfPower.WATT, precision=1
+        ),
         _measurement("dc_input_voltage", *_VOLTS, precision=2),
         _measurement("dc_input_current", *_AMPERES, precision=2),
         _measurement("dc_output_voltage", *_VOLTS, precision=2),
@@ -103,7 +120,7 @@ SENSOR_TYPES: Final[dict[str, SensorEntityDescription]] = {
         SensorEntityDescription(
             key="battery_cycles", state_class=SensorStateClass.TOTAL_INCREASING
         ),
-        _diagnostic("power_board_firmware_version"),
+        _diagnostic("power_board_firmware_version", value_fn=firmware_version),
         _diagnostic("power_board_hardware_version", enabled=False),
         _measurement(
             "wifi_rssi",
@@ -137,4 +154,10 @@ class WalleCubeSensor(WalleCubeEntity, SensorEntity):
 
     @property
     def native_value(self) -> Any:
+        description = self.entity_description
+        if (
+            isinstance(description, WalleCubeSensorEntityDescription)
+            and description.value_fn is not None
+        ):
+            return description.value_fn(self._value)
         return self._value

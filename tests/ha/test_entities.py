@@ -168,8 +168,19 @@ def test_device_info_names_the_model_and_the_front_panel_versions(device: Device
 
     assert info["model"] == "W180"
     assert info["name"] == "W180-4E52"
-    assert info["sw_version"] == "20"
+    # firmware as the vendor app shows it
+    assert info["sw_version"] == "1.20"
     assert info["hw_version"] == "3"
+
+
+def test_power_board_firmware_reads_like_the_vendor_app(device: Device):
+    device.info_parse(bytes.fromhex("00 0300 1d00 0300 1300") + bytes(6))
+
+    firmware = WalleCubeSensor(device, SENSOR_TYPES["power_board_firmware_version"])
+    hardware = WalleCubeSensor(device, SENSOR_TYPES["power_board_hardware_version"])
+
+    assert firmware.native_value == "1.29"
+    assert hardware.native_value == 3
 
 
 def test_brightness_is_a_percentage_slider(device: Device):

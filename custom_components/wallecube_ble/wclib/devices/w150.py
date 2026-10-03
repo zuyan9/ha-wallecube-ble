@@ -210,6 +210,8 @@ class Device(DeviceBase, RawDataProps):
     output_over_current = raw_field(tele.fault_flags, prop_has_bit_on(11))
 
     output_power = Field[float]()
+    # positive while charging, like the battery current
+    battery_power = Field[float]()
     remaining_time_discharging = Field[int]()
     # highest minus lowest cell voltage in mV, the vendor app's balance indicator
     cell_voltage_difference = Field[int]()
@@ -277,6 +279,7 @@ class Device(DeviceBase, RawDataProps):
         # only lasts for the frame that carries it
         derived = (
             Device.output_power,
+            Device.battery_power,
             Device.remaining_time_discharging,
             Device.cell_voltage_difference,
             Device.battery_health,
@@ -317,6 +320,8 @@ class Device(DeviceBase, RawDataProps):
             self.output_power = round(
                 self.dc_output_voltage * self.dc_output_current, 2
             )
+        if self.battery_voltage is not None and self.battery_current is not None:
+            self.battery_power = round(self.battery_voltage * self.battery_current, 2)
 
         cells = (
             telemetry.cell_voltage_1,

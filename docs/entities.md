@@ -16,6 +16,9 @@ show as unavailable until measurements resume. The settings stay available.
 - **Battery Voltage**: the sum of the cell voltages, corrected for the battery's internal
   resistance.
 - **Battery Current**: positive while the battery charges, negative while it discharges.
+- **Battery Power**: Battery Voltage times Battery Current, so also negative while the
+  battery discharges. Home Assistant's Energy dashboard counts discharging as positive
+  and can invert the sensor.
 - **Cell 1–4 Voltage**: the four cells in series, from the bottom of the stack.
 - **Max Voltage Difference**: the highest minus the lowest cell voltage, the vendor
   app's balance indicator.
@@ -79,9 +82,10 @@ below the output and *Power Restored* when that ends. See
 ## Versions
 
 The device page shows the firmware and hardware versions of the UPS's front panel,
-**UPS Firmware Version** and **UPS Hardware Version** those of its power board, as the
-numbers the UPS reports. The vendor app shows them in its own format, e.g. firmware 19
-as V1.19. The power board's hardware version tells the model: 3 is a W150, 4 a W180.
+**UPS Firmware Version** and **UPS Hardware Version** those of its power board. Firmware
+versions show as in the vendor app, e.g. 1.19, which the UPS reports as 19. Hardware
+versions are the numbers the UPS reports, and the power board's tells the model: 3 is a
+W150, 4 a W180.
 Without the power board's versions, the model shows as WalleCube UPS, see
 [Controls](#controls).
 

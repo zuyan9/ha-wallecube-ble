@@ -236,6 +236,9 @@
       "battery_current": {
         "name": "电池电流"
       },
+      "battery_power": {
+        "name": "电池功率"
+      },
       "dc_input_voltage": {
         "name": "输入电压"
       },

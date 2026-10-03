@@ -67,6 +67,8 @@ async def test_parses_telemetry_in_display_units(device: Device):
     assert device.battery_level == 87.5
     assert device.battery_voltage == 12.48
     assert device.battery_current == -1.45
+    # negative while discharging, like the current
+    assert device.battery_power == round(12.48 * -1.45, 2)
     assert device.temperature == 25.3
     assert device.energy_total == 1.235
     assert device.cell_voltage_1 == 3.122
@@ -272,6 +274,7 @@ def test_data_fields_are_the_values_from_telemetry(device: Device):
         "battery_fault",
         "input_over_voltage",
         "output_power",
+        "battery_power",
         "remaining_time_discharging",
     } <= device.data_fields
     # settings, versions and Wi-Fi come from elsewhere, the event only lasts a frame
