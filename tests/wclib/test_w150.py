@@ -30,6 +30,7 @@ from tests.fakes import (
     ups_client,
 )
 
+CHARGING = 1 << 7
 ON_BATTERY = 1 << 8
 INPUT_POWER = 1 << 10
 
@@ -108,6 +109,67 @@ async def test_maps_status_flag_bits(device: Device, bit: int, field_name: str |
     flags = ("overload", "over_temperature", "shutdown_imminent", "charging")
     for name in (*flags, "discharging", "input_power_ok"):
         assert getattr(device, name) is (name == field_name)
+
+
+async def test_charging_changes_once_the_flag_lasted_30_frames(device: Device):
+    states = []
+    device.subscribe("charging", lambda: states.append(device.charging))
+
+    # the first frame sets it at once
+    await device.data_parse(telemetry_frame())
+    for _ in range(29):
+        await device.data_parse(telemetry_frame(status_flags=CHARGING))
+    assert states == [False]
+
+    await device.data_parse(telemetry_frame(status_flags=CHARGING))
+
+    assert states == [False, True]
+
+
+async def test_charging_holds_while_the_flag_toggles_at_the_end_of_a_charge(
+    device: Device,
+):
+    states = []
+    device.subscribe("charging", lambda: states.append(device.charging))
+    await device.data_parse(telemetry_frame(status_flags=CHARGING))
+
+    # the battery current passes 20 mA, and the measurement noise toggles the flag
+    for i in range(100):
+        await device.data_parse(telemetry_frame(status_flags=CHARGING * (i % 2)))
+    assert states == [True]
+
+    # until the current stays below
+    for _ in range(30):
+        await device.data_parse(telemetry_frame())
+
+    assert states == [True, False]
+
+
+async def test_charging_ends_at_once_when_the_ups_switches_to_battery(device: Device):
+    await device.data_parse(telemetry_frame(status_flags=CHARGING | INPUT_POWER))
+
+    # the power board clears the charging flag when it loses input power
+    await device.data_parse(telemetry_frame(status_flags=ON_BATTERY))
+
+    assert device.charging is False
+
+
+async def test_first_charging_flag_of_a_new_session_counts_at_once(
+    device: Device, establish, client, mocker: MockerFixture
+):
+    mocker.patch.object(device, "refresh_settings", new=AsyncMock())
+    await device.connect()
+    frame = telemetry_frame(status_flags=CHARGING)
+    await notify_handler(client)(None, bytearray(frame))
+    drop_link(establish, client)
+    establish.return_value = reconnected = ups_client()
+    await device.connect()
+
+    # the battery got full while the link was down
+    await notify_handler(reconnected)(None, bytearray(telemetry_frame()))
+
+    assert device.charging is False
+    await device.disconnect()
 
 
 @pytest.mark.parametrize(
@@ -271,6 +333,7 @@ def test_data_fields_are_the_values_from_telemetry(device: Device):
     assert {
         "battery_level",
         "input_power_ok",
+        "charging",
         "battery_fault",
         "input_over_voltage",
         "output_power",

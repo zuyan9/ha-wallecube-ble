@@ -18,6 +18,7 @@ from ..connection import (
     STANDBY_CHARACTERISTIC_UUID,
     TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
     UPS_SERVICE_UUID,
+    ConnectionState,
     config_source,
 )
 from ..devicebase import DeviceBase
@@ -50,6 +51,8 @@ info = dataclass_attr_mapper(InfoBlock)
 _on_battery = prop_has_bit_on(8)
 # status flag, set while the input is above the power-good threshold
 _input_power = prop_has_bit_on(10)
+# status flag, set while not on battery and the battery current is above 20 mA
+_charging_flag = prop_has_bit_on(7)
 # fault flag of the power board's over-voltage protection
 _over_voltage = prop_has_bit_on(10)
 
@@ -58,6 +61,12 @@ _over_voltage = prop_has_bit_on(10)
 # output is at least this many mV above the adapter voltage. On input power the output
 # follows the input.
 _OVER_VOLTAGE_MARGIN = 2000
+
+# The power board compares the battery current with 20 mA in every frame, without
+# hysteresis, so its charging flag can toggle from frame to frame while the current
+# passes 20 mA at the end of a charge. A change of the flag counts once it lasted this
+# many frames in a row, about 30 s.
+_CHARGING_HOLD_FRAMES = 30
 
 # remaining time the power board reports when it has no load to estimate from or the
 # estimate exceeds about 18 hours, and when its battery monitor missed a sample
@@ -196,7 +205,8 @@ class Device(DeviceBase, RawDataProps):
     # status flag names follow the vendor app
     overload = raw_field(tele.status_flags, prop_has_bit_on(2))
     shutdown_imminent = raw_field(tele.status_flags, prop_has_bit_on(4))
-    charging = raw_field(tele.status_flags, prop_has_bit_on(7))
+    # follows its flag once a change lasted, see `_CHARGING_HOLD_FRAMES`
+    charging = Field[bool]()
     discharging = raw_field(tele.status_flags, _on_battery)
     input_power_ok = raw_field(tele.status_flags, _input_power)
     # the vendor app ignores these conditions, they follow the power-board firmware
@@ -257,6 +267,9 @@ class Device(DeviceBase, RawDataProps):
     _last_screen_timeout = DEFAULT_SCREEN_TIMEOUT
     # as reported, including the value for "keep screen on"
     _raw_screen_timeout: int | None = None
+    # frames in a row whose charging flag differs from `charging`; None until the
+    # first frame of a session, which sets it at once
+    _charging_hold: int | None = None
 
     def __init__(self, ble_dev: BLEDevice, adv_data: AdvertisementData) -> None:
         super().__init__(ble_dev, adv_data)
@@ -267,6 +280,7 @@ class Device(DeviceBase, RawDataProps):
         self._wake_on_lan_lock = asyncio.Lock()
         self._screen_lock = asyncio.Lock()
         self._config_replies: dict[int, list[asyncio.Future[None]]] = defaultdict(list)
+        self.listeners.on_state_change.add(self._restart_charging_hold)
 
     @classmethod
     def check(cls, adv_data: AdvertisementData) -> bool:
@@ -281,6 +295,7 @@ class Device(DeviceBase, RawDataProps):
         # the derived values come from telemetry too; the power event is left out, it
         # only lasts for the frame that carries it
         derived = (
+            Device.charging,
             Device.output_power,
             Device.battery_power,
             Device.remaining_time_discharging,
@@ -337,6 +352,7 @@ class Device(DeviceBase, RawDataProps):
         )
         self.battery_health = _battery_health(telemetry.battery_cycles)
         self.input_over_voltage = _input_over_voltage(telemetry, self.adapter_voltage)
+        self.charging = self._hold_charging(telemetry.status_flags)
 
         self.remaining_time_discharging = _minutes_until_output_off(
             telemetry, self.power_board_firmware_version
@@ -345,6 +361,28 @@ class Device(DeviceBase, RawDataProps):
 
         self._publish_updates()
         return True
+
+    def _hold_charging(self, status_flags: int | None) -> bool | None:
+        """Charging state after a frame, see `_CHARGING_HOLD_FRAMES`"""
+        current, reported = self.charging, _charging_flag(status_flags)
+        if (
+            current is not None
+            and reported is not None
+            and current != reported
+            and self._charging_hold is not None
+            # charging ends at once when the UPS switches to battery
+            and not _on_battery(status_flags)
+        ):
+            self._charging_hold += 1
+            if self._charging_hold < _CHARGING_HOLD_FRAMES:
+                return current
+        self._charging_hold = 0
+        return reported
+
+    def _restart_charging_hold(self, state: ConnectionState) -> None:
+        # the battery can have started or stopped charging while disconnected
+        if state is ConnectionState.AUTHENTICATED:
+            self._charging_hold = None
 
     def info_parse(self, info: bytes) -> None:
         self.update_from_bytes(InfoBlock, info)

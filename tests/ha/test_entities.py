@@ -233,28 +233,28 @@ async def test_only_sensors_follow_the_update_period(
     )
     device.with_update_period(10)
     level = WalleCubeSensor(device, SENSOR_TYPES["battery_level"])
-    charging = WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["charging"])
+    input_power = WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["input_power_ok"])
     event = WalleCubeEvent(device, EVENT_TYPES["power_event"])
-    for entity in (level, charging, event):
+    for entity in (level, input_power, event):
         entity.async_write_ha_state = MagicMock()
         await entity.async_added_to_hass()
 
-    # (time, charging, power event); the battery level changes with every frame and
-    # alone in the one that ends the first seconds, which starts the update period
+    # (time, input power, power event); the battery level changes with every frame
+    # and alone in the one that ends the first seconds, which starts the update period
     frames = [(1000, 0, 0), (1001, 1, 0), (1007, 1, 0), (1008, 0, 2), (1009, 1, 0)]
-    for i, (at, charging_bit, event_byte) in enumerate(frames):
+    for i, (at, input_power_bit, event_byte) in enumerate(frames):
         clock.return_value = at
         await device.data_parse(
             telemetry_frame(
                 battery_permille=500 + i,
-                status_flags=charging_bit << 7,
+                status_flags=input_power_bit << 10,
                 event=event_byte,
             )
         )
 
     # the sensor holds the changes within the update period, the others do not
     assert level.async_write_ha_state.call_count == 3
-    assert charging.async_write_ha_state.call_count == 4
+    assert input_power.async_write_ha_state.call_count == 4
     # the power event lasts one frame, it must not wait for the next period
     event.async_write_ha_state.assert_called_once()
 

@@ -276,6 +276,9 @@ threshold and high again when it falls below; the effect on the output is not ve
 
 The other bits are never set. On firmware 1.29 with the default reserve, bit 4 is set
 below a battery level of about 8.5 %, and bit 5 together with a battery level of 0 %.
+Bit 7 compares the latest battery current with 20 mA for every block, without
+hysteresis. The current passes 20 mA at the end of every charge, as the power board
+counts the battery as full only once the current stays below 10 mA for 20 s.
 
 ## Power-board link
 

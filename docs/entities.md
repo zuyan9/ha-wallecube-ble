@@ -45,7 +45,11 @@ show as unavailable until measurements resume. The settings stay available.
 
 - **Input Power**: on while the input voltage is above the power-good threshold, by
   default 95.8 % of Adapter Voltage. Below it, the UPS runs from the battery.
-- **Charging**: the battery is charging.
+- **Charging**: the battery charges with more than 20 mA. At the end of a charge, while
+  the current passes 20 mA, the UPS can switch charging on and off from one second to
+  the next, and so does the charging icon on its display. Here a change shows once it
+  lasted about 30 s, except that Charging turns off at once when the UPS switches to
+  battery.
 - **Discharging**: the output runs from the battery. It turns on when input power is lost
   and stays on for about 30 s after it returns.
 - **Overload**: the output draws more than 120 W on battery. The UPS only reports it, but
