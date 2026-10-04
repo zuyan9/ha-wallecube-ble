@@ -8,6 +8,7 @@ from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceIn
 from homeassistant.helpers.entity import Entity, EntityDescription
 
 from .const import DOMAIN, MANUFACTURER
+from .repairs import async_create_restart_issue
 from .wclib import DeviceBase
 from .wclib.exceptions import (
     PacketParseError,
@@ -38,6 +39,8 @@ class WalleCubeEntity(Entity):
     _attr_should_poll = False
     # sensors follow the update period, the other entities are written at once
     _throttled = False
+    # a setting the device applies only when it restarts, see `controls`
+    _restart_required = False
 
     def __init__(self, device: DeviceBase, description: EntityDescription) -> None:
         self._device = device
@@ -79,7 +82,13 @@ class WalleCubeEntity(Entity):
     async def _change_setting[*Ts](
         self, setter: Callable[[DeviceBase, *Ts], Awaitable[None]], *args: *Ts
     ) -> None:
-        """Call a device setter, reporting communication failures to the user"""
+        """
+        Call a device setter, reporting communication failures to the user
+
+        A change the device applies only when it restarts raises a repair issue that
+        asks for the restart.
+        """
+        before = self._value
         try:
             await setter(self._device, *args)
         except _SETTING_ERRORS as e:
@@ -88,6 +97,12 @@ class WalleCubeEntity(Entity):
                 translation_key="setting_failed",
                 translation_placeholders={"error": str(e)},
             ) from e
+        if (
+            self._restart_required
+            and self._value != before
+            and (entry := self.platform.config_entry) is not None
+        ):
+            async_create_restart_issue(self.hass, entry.entry_id, self._device)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

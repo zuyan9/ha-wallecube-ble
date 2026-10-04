@@ -5,16 +5,20 @@ import pytest
 # a Home Assistant that fails to import its dependencies skips these tests too
 pytest.importorskip("homeassistant.components.bluetooth", exc_type=ImportError)
 
-from unittest.mock import MagicMock, PropertyMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 from homeassistant.components.number import NumberMode
 from homeassistant.const import PERCENTAGE, EntityCategory
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble.binary_sensor import (
     BINARY_SENSOR_TYPES,
     WalleCubeBinarySensor,
 )
+from custom_components.wallecube_ble.const import DOMAIN
 from custom_components.wallecube_ble.event import EVENT_TYPES, WalleCubeEvent
 from custom_components.wallecube_ble.number import WalleCubeNumber
 from custom_components.wallecube_ble.select import WalleCubeSelect
@@ -26,7 +30,8 @@ from custom_components.wallecube_ble.wclib.devices.w150 import (
     Device,
     PowerEvent,
 )
-from tests.fakes import telemetry_frame
+from custom_components.wallecube_ble.wclib.exceptions import SettingNotConfirmed
+from tests.fakes import W150_INFO, telemetry_frame
 
 
 def control(device: Device, control_type: type[controls.ControlType], key: str):
@@ -36,6 +41,19 @@ def control(device: Device, control_type: type[controls.ControlType], key: str):
 def publish(device: Device, field_name: str, value) -> None:
     setattr(device, field_name, value)
     device._publish_updates()
+
+
+def added_number(device: Device, key: str) -> WalleCubeNumber:
+    """Number entity as Home Assistant sets it up for a config entry"""
+    number = WalleCubeNumber(device, control(device, controls.NumberType, key))
+    number.hass = MagicMock()
+    number.platform = MagicMock(config_entry=SimpleNamespace(entry_id="entry_id"))
+    return number
+
+
+@pytest.fixture
+def create_issue(mocker: MockerFixture) -> MagicMock:
+    return mocker.patch.object(ir, "async_create_issue")
 
 
 def test_entities_are_not_polled(device: Device):
@@ -255,3 +273,78 @@ def test_cell_voltages_share_one_translation(device: Device):
     assert sensor.unique_id == f"wc_{device.identifier}_cell_voltage_2"
     assert sensor.translation_key == "cell_voltage"
     assert sensor.entity_description.translation_placeholders == {"n": "2"}
+
+
+async def test_adapter_change_asks_for_a_restart(
+    device: Device, create_issue: MagicMock
+):
+    device.info_parse(W150_INFO + bytes(6))
+    publish(device, "adapter_voltage", 12.0)
+    publish(device, "adapter_current", 3.0)
+    publish(device, "power_good_voltage", 11.496)
+    number = added_number(device, "adapter_voltage")
+
+    async def write(device: Device, volts: float) -> None:
+        # the values the UPS reports after a confirmed write
+        publish(device, "adapter_voltage", volts)
+        publish(device, "power_good_voltage", 18.681)
+
+    number._set_value = AsyncMock(side_effect=write)
+    await number.async_set_native_value(19.5)
+
+    create_issue.assert_called_once_with(
+        number.hass,
+        DOMAIN,
+        "restart_required_entry_id",
+        is_fixable=True,
+        is_persistent=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="restart_required",
+        # the diagnostics include the issue, so it names the model, not the device
+        translation_placeholders={
+            "model": "W150",
+            "voltage": "19.5",
+            "current": "3",
+            "power_off": "18.7",
+        },
+    )
+
+
+async def test_unchanged_adapter_setting_needs_no_restart(
+    device: Device, create_issue: MagicMock
+):
+    publish(device, "adapter_voltage", 12.0)
+    number = added_number(device, "adapter_voltage")
+    number._set_value = AsyncMock()
+
+    await number.async_set_native_value(12.0)
+
+    create_issue.assert_not_called()
+
+
+async def test_failed_adapter_change_needs_no_restart(
+    device: Device, create_issue: MagicMock
+):
+    publish(device, "adapter_voltage", 12.0)
+    number = added_number(device, "adapter_voltage")
+    number._set_value = AsyncMock(side_effect=SettingNotConfirmed("no answer"))
+
+    with pytest.raises(HomeAssistantError):
+        await number.async_set_native_value(19.5)
+
+    create_issue.assert_not_called()
+
+
+async def test_other_settings_apply_without_a_restart(
+    device: Device, create_issue: MagicMock
+):
+    publish(device, "standby_time", 300)
+    number = added_number(device, "standby_time")
+    number._set_value = AsyncMock(
+        side_effect=lambda device, seconds: publish(device, "standby_time", seconds)
+    )
+
+    await number.async_set_native_value(600)
+
+    assert number.native_value == 600
+    create_issue.assert_not_called()

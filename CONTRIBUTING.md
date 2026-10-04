@@ -127,6 +127,7 @@ custom_components/wallecube_ble/
 ├── brand/                 # Official WalleCube icon and logo, shown by HA 2026.3+
 ├── event.py               # Power lost/restored events
 ├── number.py              # Numeric settings
+├── repairs.py             # Restart reminder after an adapter change
 ├── select.py              # Option settings
 ├── sensor.py              # Measurement entities
 ├── switch.py              # On/off settings

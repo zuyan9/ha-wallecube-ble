@@ -234,6 +234,9 @@ class Device(DeviceBase, RawDataProps):
     # settings, in the order of the vendor app's advanced configuration page
     adapter_voltage = Field[float]()
     adapter_current = Field[float]()
+    # derived from the adapter voltage, not a control: below it the input counts as
+    # lost. The vendor app calls it the power-off voltage.
+    power_good_voltage = Field[float]()
     standby_time = Field[int]()
     standby_current_threshold = Field[int]()
     screen_timeout = Field[int]()
@@ -472,13 +475,30 @@ class Device(DeviceBase, RawDataProps):
     async def poll(self) -> None:
         await self._request_wifi_status()
 
-    # the front panel accepts up to 20.2 V, but the power board keeps its previous
-    # voltage for values above 20 V while the write is still confirmed
-    @controls.voltage(adapter_voltage, min=5.0, max=20.0, step=0.1, enabled=False)
+    # The power board applies the adapter settings when it starts, so the vendor app
+    # asks for a restart with the reset hole; only the charging-current limit follows
+    # a new adapter current at once. The front panel accepts up to 20.2 V, but the
+    # power board keeps its previous voltage for values above 20 V while the write is
+    # still confirmed.
+    @controls.voltage(
+        adapter_voltage,
+        min=5.0,
+        max=20.0,
+        step=0.1,
+        enabled=False,
+        restart_required=True,
+    )
     async def set_adapter_voltage(self, volts: float) -> None:
         await self._write_adapter(voltage=volts)
 
-    @controls.current(adapter_current, min=2.0, max=10.0, step=0.1, enabled=False)
+    @controls.current(
+        adapter_current,
+        min=2.0,
+        max=10.0,
+        step=0.1,
+        enabled=False,
+        restart_required=True,
+    )
     async def set_adapter_current(self, amperes: float) -> None:
         await self._write_adapter(current=amperes)
 
@@ -678,11 +698,13 @@ class Device(DeviceBase, RawDataProps):
             await self.read_value(ADAPTER_CHARACTERISTIC_UUID)
         )
         voltage, current = settings.adapter_voltage, settings.adapter_current
+        power_good = settings.power_good_voltage
         # written as a block, so one missing value makes the block unknown
         if (voltage or 0) < _MIN_ADAPTER_MV or (current or 0) < _MIN_ADAPTER_MA:
-            voltage = current = None
+            voltage = current = power_good = None
         self.adapter_voltage = _scaled(voltage, 1000)
         self.adapter_current = _scaled(current, 1000)
+        self.power_good_voltage = _scaled(power_good, 1000)
         self._publish_updates()
 
     async def _read_standby(self) -> None:

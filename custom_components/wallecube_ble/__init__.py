@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_UPDATE_PERIOD,
     DOMAIN,
 )
+from .repairs import async_delete_restart_issue
 from .wclib.connection import BleakError
 from .wclib.exceptions import SessionKeyError, UnsupportedBluetoothProtocol
 from .wclib.logging_util import DeviceDiagnosticsCollector, mask_identifiers
@@ -145,6 +146,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeviceConfigEntry) -> b
 async def async_remove_entry(hass: HomeAssistant, entry: DeviceConfigEntry):
     _cancel_reappear_callback(hass, entry)
     hass.data.get(_DIAGNOSTICS_KEY, {}).pop(entry.entry_id, None)
+    # not on unload: after a reload the UPS may still wait for its restart
+    async_delete_restart_issue(hass, entry.entry_id)
 
 
 def _register_reappear_callback(

@@ -14,6 +14,7 @@ from homeassistant.config_entries import SOURCE_BLUETOOTH, ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 from pytest_mock import MockerFixture
 
 from custom_components.wallecube_ble import (
@@ -54,6 +55,12 @@ def discovered_device(mocker: MockerFixture) -> MagicMock:
             device=ble_device(), advertisement=advertisement()
         ),
     )
+
+
+@pytest.fixture(autouse=True)
+def delete_issue(mocker: MockerFixture) -> MagicMock:
+    """The issue registry, which the mocked Home Assistant lacks"""
+    return mocker.patch.object(ir, "async_delete_issue")
 
 
 @pytest.fixture
@@ -241,6 +248,22 @@ async def test_removed_entry_forgets_its_diagnostics(hass, entry, establish):
     ]
     assert [item["state"] for item in history].count("AUTHENTICATED") == 1
     await async_unload_entry(hass, entry)
+
+
+async def test_removed_entry_drops_its_restart_issue(
+    hass, entry, establish, delete_issue: MagicMock
+):
+    assert await async_setup_entry(hass, entry)
+    assert await async_unload_entry(hass, entry)
+
+    # a reload keeps it, the UPS may still wait for its restart
+    delete_issue.assert_not_called()
+
+    await async_remove_entry(hass, entry)
+
+    delete_issue.assert_called_once_with(
+        hass, DOMAIN, f"restart_required_{entry.entry_id}"
+    )
 
 
 async def test_late_power_board_versions_update_the_device_entry(

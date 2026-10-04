@@ -37,6 +37,7 @@ class WalleCubeSwitch(WalleCubeEntity, SwitchEntity):
             ),
         )
         self._enable = control.enable_func
+        self._restart_required = control.restart_required
 
     @property
     def is_on(self) -> bool | None:

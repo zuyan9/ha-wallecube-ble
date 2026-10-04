@@ -36,6 +36,7 @@ class WalleCubeSelect(WalleCubeEntity, SelectEntity):
             ),
         )
         self._set_value = control.set_value_func
+        self._restart_required = control.restart_required
 
     @property
     def current_option(self) -> str | None:

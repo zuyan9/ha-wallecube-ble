@@ -70,6 +70,7 @@ class WalleCubeNumber(WalleCubeEntity, NumberEntity):
             ),
         )
         self._set_value = control.set_value_func
+        self._restart_required = control.restart_required
 
     @property
     def native_value(self) -> float | None:

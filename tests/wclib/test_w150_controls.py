@@ -185,11 +185,22 @@ def test_declares_controls_of_the_app_settings_page(device: Device):
     ]
 
 
+def test_only_the_adapter_settings_need_a_restart(device: Device):
+    # the power board applies them when it starts
+    assert [
+        c.key
+        for control_type in (controls.NumberType, controls.select, controls.switch)
+        for c in get_controls(device, control_type)
+        if c.restart_required
+    ] == ["adapter_voltage", "adapter_current"]
+
+
 async def test_refresh_reads_all_settings(device: Device, settings):
     await device.refresh_settings()
 
     assert device.adapter_voltage == 12.0
     assert device.adapter_current == 3.0
+    assert device.power_good_voltage == 11.496
     assert device.standby_time == 300
     assert device.standby_current_threshold == 100
     assert device.buzzer_mode is BuzzerMode.ONCE
@@ -251,6 +262,7 @@ async def test_select_writes_option_value(device: Device, settings):
     [
         ("_read_adapter", "adapter_voltage"),
         ("_read_adapter", "adapter_current"),
+        ("_read_adapter", "power_good_voltage"),
         ("_read_standby", "standby_time"),
         ("_read_standby", "standby_current_threshold"),
         ("_read_temperature_unit", "temperature_unit"),
@@ -278,7 +290,11 @@ async def test_settings_the_power_board_did_not_report_are_unknown(
 
     await device.refresh_settings()
 
-    assert (device.adapter_voltage, device.adapter_current) == (None, None)
+    assert (
+        device.adapter_voltage,
+        device.adapter_current,
+        device.power_good_voltage,
+    ) == (None, None, None)
     assert (device.standby_time, device.standby_current_threshold) == (None, None)
     # a block written from them would carry the front panel's minimums, e.g. 2 A
     for change, value in (
@@ -368,6 +384,7 @@ async def test_adapter_voltage_rewrites_block_with_current_rating(
     assert struct.unpack("<5H", payload) == (3000, 2100, 19500, 18817, 18681)
     assert device.adapter_voltage == 19.5
     assert device.adapter_current == 3.0
+    assert device.power_good_voltage == 18.681
     device.send_command.assert_not_awaited()
 
 

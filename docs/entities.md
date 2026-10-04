@@ -106,6 +106,8 @@ and sleep settings can't be changed until the UPS restarts.
   if the UPS does not confirm that its power board received it. The power board applies
   it when it restarts, so gently press the reset hole on the front panel afterwards, as
   the app asks; only the charging-current limit follows a new Adapter Current at once.
+  Until you confirm the restart, a repair under **Settings → Repairs** reminds you of it
+  and shows the new values and the power-good threshold they give.
 - **Sleep Time** and **Sleep Min Current**: on battery, the UPS turns its output off once
   the load stays below Sleep Min Current for Sleep Time. It wakes up when input power
   returns or the front-panel button is pressed, not when the load rises again. The vendor

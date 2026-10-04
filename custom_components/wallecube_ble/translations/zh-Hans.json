@@ -290,5 +290,18 @@
         "name": "屏幕常亮"
       }
     }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "重启 {model} 以应用电源适配器设置",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "重启 {model}",
+            "description": "{model} 已保存新的电源适配器设置（{voltage} V、{current} A），将在重启时应用。在此之前，电池供电时仍输出原来的电压。\n\n请轻轻捅一下前面板的重启孔，使其重启。厂商应用说明可带负载操作。重启后，输入电压低于 {power_off} V 时，UPS 将改由电池供电。\n\nUPS 重启后，请选择**提交**。Home Assistant 无法自行检测重启。"
+          }
+        }
+      }
+    }
   }
 }

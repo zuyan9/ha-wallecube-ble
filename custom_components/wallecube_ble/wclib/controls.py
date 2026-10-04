@@ -33,6 +33,9 @@ class ControlType:
     # characteristic only some firmware versions expose, the control is not offered
     # for a device that lacks it
     characteristic: str | None = dataclasses.field(default=None, kw_only=True)
+    # the device saves a change at once but applies it only when it restarts, which
+    # the user has to do on the device
+    restart_required: bool = dataclasses.field(default=False, kw_only=True)
 
     @property
     def key(self) -> str:

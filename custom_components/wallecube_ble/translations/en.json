@@ -290,5 +290,18 @@
         "name": "Keep Screen On"
       }
     }
+  },
+  "issues": {
+    "restart_required": {
+      "title": "Restart the {model} to apply the adapter settings",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Restart the {model}",
+            "description": "The {model} saved the new adapter settings, {voltage} V and {current} A, and applies them when it restarts. Until then, it still outputs the previous voltage on battery.\n\nGently press the reset hole on the front panel to restart it. As the vendor app notes, the load can stay connected. After the restart, the UPS runs from its battery when the input voltage drops below {power_off} V.\n\nSelect **Submit** once the UPS has restarted. Home Assistant can't detect the restart itself."
+          }
+        }
+      }
+    }
   }
 }

@@ -73,7 +73,8 @@ What each entity means, and what to watch out for: [Entities](docs/entities.md).
 
 > **⚠️ Warning:** Adapter Voltage and Adapter Current must match the label of the power
 > adapter feeding the UPS, see [Controls](docs/entities.md#controls). Both are disabled
-> by default.
+> by default. The UPS applies a change after you restart it with the reset hole on its
+> front panel.
 
 </details>
 

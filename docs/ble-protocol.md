@@ -527,11 +527,12 @@ empty: it scales payload offset 26 by the share of the charge above the cut-off,
 assuming the default reserve, and reports none while the power-board version is unknown.
 When no telemetry notification arrives for 60 s, it shows the telemetry values as
 unavailable until the next one. It waits for the result of adapter writes and sends an
-unconfirmed block once more; standby writes stay unconfirmed. It shows adapter and
-standby blocks with a value below the power board's range as unknown and does not write
-them, and while the info block reports power-board versions 0, it reads the info block
-and both blocks again, 3 and 13 s after reading the settings. Its input over-voltage
-sensor is also on while status bit 10 is set and the output voltage is at least 2 V
-above the adapter voltage, the condition that keeps fault bit 10 set. The factory reset,
-`0xF0B7`, the last three standby values, the Wake-on-LAN targets and Wi-Fi setup are not
-exposed.
+unconfirmed block once more; standby writes stay unconfirmed. After an adapter write
+that changed a value, it shows a repair issue asking for the restart until the user
+confirms it. It shows adapter and standby blocks with a value below the power board's
+range as unknown and does not write them, and while the info block reports power-board
+versions 0, it reads the info block and both blocks again, 3 and 13 s after reading the
+settings. Its input over-voltage sensor is also on while status bit 10 is set and the
+output voltage is at least 2 V above the adapter voltage, the condition that keeps fault
+bit 10 set. The factory reset, `0xF0B7`, the last three standby values, the Wake-on-LAN
+targets and Wi-Fi setup are not exposed.
