@@ -1,0 +1,118 @@
+name: Release
+run-name: Release ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (e.g. 0.2.0, 0.2.0b1, or 0.2.0rc1; optional v prefix)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          # current Home Assistant needs Python 3.14, older ones get an old release
+          python-version: "3.14"
+      - name: Set the release version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-project --with packaging python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          from packaging.version import InvalidVersion, Version
+
+          version = os.environ["VERSION"].removeprefix("v")
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?", version):
+              raise SystemExit("Use X.Y.Z, X.Y.ZaN, X.Y.ZbN, or X.Y.ZrcN")
+          parsed = Version(version)
+          if str(parsed) != version:
+              raise SystemExit("Version numbers must not contain leading zeros")
+          ref = os.environ["GITHUB_REF"]
+          if not ref.startswith("refs/heads/"):
+              raise SystemExit("Releases must be run from a branch")
+          default_ref = f"refs/heads/{os.environ['DEFAULT_BRANCH']}"
+          if not parsed.is_prerelease and ref != default_ref:
+              raise SystemExit("Stable releases must be run from the default branch")
+          manifest_path = Path("custom_components/wallecube_ups_ble/manifest.json")
+          manifest = manifest_path.read_text()
+          if parsed < Version(json.loads(manifest)["version"]):
+              raise SystemExit("The release cannot be older than the current version")
+          tags = subprocess.check_output(["git", "tag", "--list"], text=True)
+          for tag in tags.splitlines():
+              try:
+                  previous = Version(tag)
+              except InvalidVersion:
+                  continue
+              if parsed <= previous:
+                  raise SystemExit(f"The release must be newer than existing tag {tag}")
+          # replaced in place, the manifest keeps its layout
+          manifest, count = re.subn(
+              r'("version":\s*")[^"]*"', rf'\g<1>{version}"', manifest
+          )
+          if count != 1:
+              raise SystemExit("The manifest must state its version exactly once")
+          manifest_path.write_text(manifest)
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"RELEASE_TAG=v{version}\n")
+              output.write(f"PRERELEASE={str(parsed.is_prerelease).lower()}\n")
+          PY
+      - name: Run offline checks
+        run: |
+          uvx prek run --all-files --show-diff-on-failure --color=always
+          uv run --group hass pytest
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
+      - name: HACS
+        uses: hacs/action@main
+        env:
+          REPOSITORY_REF: ${{ github.sha }}
+        with:
+          category: integration
+          comment: "false"
+      - name: Commit, tag, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          remote_head=$(git ls-remote --exit-code origin "$GITHUB_REF" | cut -f1)
+          if [[ "$remote_head" != "$GITHUB_SHA" ]]; then
+            echo "::error::The selected branch changed during validation. Run Release again."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/wallecube_ups_ble/manifest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release $RELEASE_TAG"
+          fi
+          git tag "$RELEASE_TAG"
+          git push --atomic origin "HEAD:$GITHUB_REF" "refs/tags/$RELEASE_TAG"
+          flags=(--latest)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            flags=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --generate-notes "${flags[@]}"

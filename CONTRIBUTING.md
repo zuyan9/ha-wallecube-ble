@@ -8,6 +8,7 @@ problems, set up a development environment and get a change merged.
 - [Ways to contribute](#ways-to-contribute)
 - [Development setup](#development-setup)
 - [Making a pull request](#making-a-pull-request)
+- [Releasing](#releasing)
 - [Style guide](#style-guide)
 - [Project layout](#project-layout)
 
@@ -97,6 +98,18 @@ ln -s "$(pwd)/custom_components/wallecube_ups_ble" \
 - Describe the user-visible effect, the hardware you tested on and the commands you ran.
 - AI-assisted contributions are fine as long as you have read, understood and tested
   every line you submit.
+
+## Releasing
+
+Maintainers publish a release with the **Release** workflow: **Actions → Release → Run
+workflow**, or `gh workflow run release.yml -f version=0.2.0`. The workflow:
+
+- accepts `X.Y.Z` for a stable release, run from `main`, and `X.Y.ZaN`, `X.Y.ZbN` or
+  `X.Y.ZrcN` for a pre-release, run from any branch. The version must not be older than
+  the manifest's and must be newer than every tag;
+- runs the hooks, the tests, hassfest and the HACS action;
+- sets the version in `manifest.json`, commits it if it changed, tags `vX.Y.Z` and
+  publishes a GitHub release with generated notes, which you can edit afterwards.
 
 ## Style guide
 
