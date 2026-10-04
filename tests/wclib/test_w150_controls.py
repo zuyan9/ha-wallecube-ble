@@ -6,8 +6,8 @@ import pytest
 from bleak.exc import BleakError
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble.wclib import controls, get_controls
-from custom_components.wallecube_ble.wclib.connection import (
+from custom_components.wallecube_ups_ble.wclib import controls, get_controls
+from custom_components.wallecube_ups_ble.wclib.connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     BUZZER_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
@@ -15,21 +15,21 @@ from custom_components.wallecube_ble.wclib.connection import (
     STANDBY_CHARACTERISTIC_UUID,
     TEMPERATURE_UNIT_CHARACTERISTIC_UUID,
 )
-from custom_components.wallecube_ble.wclib.devices import w150
-from custom_components.wallecube_ble.wclib.devices.w150 import (
+from custom_components.wallecube_ups_ble.wclib.devices import w150
+from custom_components.wallecube_ups_ble.wclib.devices.w150 import (
     SCREEN_ALWAYS_ON,
     BuzzerMode,
     Device,
     ScreenLanguage,
     TemperatureUnit,
 )
-from custom_components.wallecube_ble.wclib.exceptions import (
+from custom_components.wallecube_ups_ble.wclib.exceptions import (
     SettingNotConfirmed,
     SettingUnavailable,
     UnsupportedBluetoothProtocol,
 )
-from custom_components.wallecube_ble.wclib.model import AdapterSettings
-from custom_components.wallecube_ble.wclib.packet import (
+from custom_components.wallecube_ups_ble.wclib.model import AdapterSettings
+from custom_components.wallecube_ups_ble.wclib.packet import (
     COMMAND_CONFIRMED,
     ConfigMessage,
 )

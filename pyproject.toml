@@ -37,7 +37,7 @@ lint = [
 ]
 
 [tool.setuptools]
-packages = [ "custom_components.wallecube_ble" ]
+packages = [ "custom_components.wallecube_ups_ble" ]
 
 [tool.ruff]
 line-length = 88

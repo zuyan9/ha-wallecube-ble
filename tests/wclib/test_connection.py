@@ -6,7 +6,7 @@ import pytest
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
-from custom_components.wallecube_ble.wclib.connection import (
+from custom_components.wallecube_ups_ble.wclib.connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     CONFIG_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
@@ -15,11 +15,11 @@ from custom_components.wallecube_ble.wclib.connection import (
     Connection,
     ConnectionState,
 )
-from custom_components.wallecube_ble.wclib.encryption import (
+from custom_components.wallecube_ups_ble.wclib.encryption import (
     SessionCipher,
     derive_session_key,
 )
-from custom_components.wallecube_ble.wclib.exceptions import (
+from custom_components.wallecube_ups_ble.wclib.exceptions import (
     PacketParseError,
     SessionKeyError,
 )
@@ -501,5 +501,5 @@ async def test_connection_failures_are_logged_without_the_address(establish, cap
     # named like the device by the last four digits of the address
     assert (
         caplog.records[0].name
-        == "custom_components.wallecube_ble.wclib.connection.4E52"
+        == "custom_components.wallecube_ups_ble.wclib.connection.4E52"
     )

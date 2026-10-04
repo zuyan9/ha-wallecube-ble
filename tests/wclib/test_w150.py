@@ -8,15 +8,15 @@ import pytest
 from bleak.exc import BleakError
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble.wclib import NewDevice
-from custom_components.wallecube_ble.wclib.connection import (
+from custom_components.wallecube_ups_ble.wclib import NewDevice
+from custom_components.wallecube_ups_ble.wclib.connection import (
     ADAPTER_CHARACTERISTIC_UUID,
     CONFIG_CHARACTERISTIC_UUID,
     UPS_SERVICE_UUID,
     ConnectionState,
 )
-from custom_components.wallecube_ble.wclib.devices.w150 import Device, PowerEvent
-from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
+from custom_components.wallecube_ups_ble.wclib.devices.w150 import Device, PowerEvent
+from custom_components.wallecube_ups_ble.wclib.exceptions import PacketParseError
 from tests.fakes import (
     CIPHER,
     W150_INFO,
@@ -313,7 +313,7 @@ async def test_each_frame_restarts_the_stale_timer(
     device: Device, mocker: MockerFixture
 ):
     clock = mocker.patch(
-        "custom_components.wallecube_ble.wclib.devicebase.time.monotonic"
+        "custom_components.wallecube_ups_ble.wclib.devicebase.time.monotonic"
     )
     clock.return_value = 1000.0
     await device._on_data(telemetry_frame())
@@ -343,7 +343,9 @@ async def test_next_frame_makes_stale_values_current_again(
 async def test_throttled_listeners_follow_the_update_period(
     device: Device, mocker: MockerFixture
 ):
-    clock = mocker.patch("custom_components.wallecube_ble.wclib.devicebase.time.time")
+    clock = mocker.patch(
+        "custom_components.wallecube_ups_ble.wclib.devicebase.time.time"
+    )
     device.with_update_period(10)
     level = mocker.Mock()
     voltage = mocker.Mock()

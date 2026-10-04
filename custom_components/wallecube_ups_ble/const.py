@@ -1,6 +1,6 @@
 """Constants for WalleCube BLE"""
 
-DOMAIN = "wallecube_ble"
+DOMAIN = "wallecube_ups_ble"
 MANUFACTURER = "WalleCube"
 
 CONF_UPDATE_PERIOD = "update_period"

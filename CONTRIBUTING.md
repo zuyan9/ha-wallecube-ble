@@ -86,7 +86,8 @@ Symlink the component into a Home Assistant config directory and restart Home As
 after changing Python code:
 
 ```bash
-ln -s "$(pwd)/custom_components/wallecube_ble" /path/to/ha-config/custom_components/wallecube_ble
+ln -s "$(pwd)/custom_components/wallecube_ups_ble" \
+  /path/to/ha-config/custom_components/wallecube_ups_ble
 ```
 
 ## Making a pull request
@@ -120,7 +121,7 @@ Most rules are enforced by `ruff`. Conventions that are not:
 ## Project layout
 
 ```text
-custom_components/wallecube_ble/
+custom_components/wallecube_ups_ble/
 ├── __init__.py            # HA integration entry point
 ├── config_flow.py         # Discovery and options flows
 ├── binary_sensor.py       # Status flag entities

@@ -1,13 +1,13 @@
 import pytest
 
-from custom_components.wallecube_ble.wclib.encryption import (
+from custom_components.wallecube_ups_ble.wclib.encryption import (
     SessionCipher,
     base_mac_from_local_name,
     candidate_base_macs,
     derive_session_key,
 )
-from custom_components.wallecube_ble.wclib.exceptions import PacketParseError
-from custom_components.wallecube_ble.wclib.packet import (
+from custom_components.wallecube_ups_ble.wclib.exceptions import PacketParseError
+from custom_components.wallecube_ups_ble.wclib.packet import (
     FRAME_MAGIC,
     ConfigMessage,
     decode_response,

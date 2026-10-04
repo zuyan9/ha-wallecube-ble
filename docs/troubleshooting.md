@@ -46,7 +46,7 @@ select **Enable debug logging** in its **⋮** menu, reproduce the problem and s
 the Bluetooth stack, do the same for the **Bluetooth** integration.
 
 Before the UPS is set up, the integration has no menu yet: use the `logger.set_level`
-action with `custom_components.wallecube_ble: debug` instead. The same action with
+action with `custom_components.wallecube_ups_ble: debug` instead. The same action with
 `bleak: debug` adds the messages of bleak itself, which the Bluetooth integration's debug
 logging leaves out.
 

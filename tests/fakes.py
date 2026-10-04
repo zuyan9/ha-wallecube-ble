@@ -10,10 +10,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 from bleak.backends.device import BLEDevice
 
-from custom_components.wallecube_ble.wclib.connection import (
+from custom_components.wallecube_ups_ble.wclib.connection import (
     TELEMETRY_CHARACTERISTIC_UUID,
 )
-from custom_components.wallecube_ble.wclib.encryption import (
+from custom_components.wallecube_ups_ble.wclib.encryption import (
     SessionCipher,
     derive_session_key,
 )

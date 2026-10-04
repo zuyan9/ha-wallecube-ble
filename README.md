@@ -124,7 +124,7 @@ What each entity means, and what to watch out for: [Entities](docs/entities.md).
 
 1. Download the latest release from
    [GitHub Releases](https://github.com/zuyan9/ha-wallecube-ble/releases)
-2. Copy the `custom_components/wallecube_ble` folder into your Home Assistant
+2. Copy the `custom_components/wallecube_ups_ble` folder into your Home Assistant
    `config/custom_components/` directory
 3. Restart Home Assistant
 

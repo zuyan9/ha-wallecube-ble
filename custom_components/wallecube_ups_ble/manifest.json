@@ -1,5 +1,5 @@
 {
-    "domain": "wallecube_ble",
+    "domain": "wallecube_ups_ble",
     "name": "WalleCube BLE (Unofficial)",
     "bluetooth": [
         {
@@ -16,7 +16,7 @@
     "integration_type": "device",
     "iot_class": "local_push",
     "issue_tracker": "https://github.com/zuyan9/ha-wallecube-ble/issues",
-    "loggers": ["custom_components.wallecube_ble"],
+    "loggers": ["custom_components.wallecube_ups_ble"],
 
     "requirements": [
         "PyCryptodome~=3.23"

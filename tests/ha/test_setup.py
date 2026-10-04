@@ -17,20 +17,20 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble import (
+from custom_components.wallecube_ups_ble import (
     async_remove_entry,
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.wallecube_ble.const import DOMAIN
-from custom_components.wallecube_ble.wclib.connection import (
+from custom_components.wallecube_ups_ble.const import DOMAIN
+from custom_components.wallecube_ups_ble.wclib.connection import (
     CONFIG_CHARACTERISTIC_UUID,
     INFO_CHARACTERISTIC_UUID,
     TELEMETRY_CHARACTERISTIC_UUID,
     ConnectionState,
 )
-from custom_components.wallecube_ble.wclib.devices import w150
-from custom_components.wallecube_ble.wclib.encryption import (
+from custom_components.wallecube_ups_ble.wclib.devices import w150
+from custom_components.wallecube_ups_ble.wclib.encryption import (
     SessionCipher,
     derive_session_key,
 )

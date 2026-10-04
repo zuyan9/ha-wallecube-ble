@@ -14,23 +14,23 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble.binary_sensor import (
+from custom_components.wallecube_ups_ble.binary_sensor import (
     BINARY_SENSOR_TYPES,
     WalleCubeBinarySensor,
 )
-from custom_components.wallecube_ble.const import DOMAIN
-from custom_components.wallecube_ble.event import EVENT_TYPES, WalleCubeEvent
-from custom_components.wallecube_ble.number import WalleCubeNumber
-from custom_components.wallecube_ble.select import WalleCubeSelect
-from custom_components.wallecube_ble.sensor import SENSOR_TYPES, WalleCubeSensor
-from custom_components.wallecube_ble.switch import WalleCubeSwitch
-from custom_components.wallecube_ble.wclib import controls, get_controls
-from custom_components.wallecube_ble.wclib.devices.w150 import (
+from custom_components.wallecube_ups_ble.const import DOMAIN
+from custom_components.wallecube_ups_ble.event import EVENT_TYPES, WalleCubeEvent
+from custom_components.wallecube_ups_ble.number import WalleCubeNumber
+from custom_components.wallecube_ups_ble.select import WalleCubeSelect
+from custom_components.wallecube_ups_ble.sensor import SENSOR_TYPES, WalleCubeSensor
+from custom_components.wallecube_ups_ble.switch import WalleCubeSwitch
+from custom_components.wallecube_ups_ble.wclib import controls, get_controls
+from custom_components.wallecube_ups_ble.wclib.devices.w150 import (
     BuzzerMode,
     Device,
     PowerEvent,
 )
-from custom_components.wallecube_ble.wclib.exceptions import SettingNotConfirmed
+from custom_components.wallecube_ups_ble.wclib.exceptions import SettingNotConfirmed
 from tests.fakes import W150_INFO, telemetry_frame
 
 
@@ -228,7 +228,9 @@ async def test_removed_entity_is_no_longer_written(device: Device):
 async def test_only_sensors_follow_the_update_period(
     device: Device, mocker: MockerFixture
 ):
-    clock = mocker.patch("custom_components.wallecube_ble.wclib.devicebase.time.time")
+    clock = mocker.patch(
+        "custom_components.wallecube_ups_ble.wclib.devicebase.time.time"
+    )
     device.with_update_period(10)
     level = WalleCubeSensor(device, SENSOR_TYPES["battery_level"])
     charging = WalleCubeBinarySensor(device, BINARY_SENSOR_TYPES["charging"])

@@ -14,10 +14,10 @@ from bleak_retry_connector import BleakNotFoundError
 from homeassistant.data_entry_flow import FlowResultType, section
 from pytest_mock import MockerFixture
 
-from custom_components.wallecube_ble import config_flow
-from custom_components.wallecube_ble.wclib.connection import UPS_SERVICE_UUID
-from custom_components.wallecube_ble.wclib.devices.w150 import Device
-from custom_components.wallecube_ble.wclib.exceptions import (
+from custom_components.wallecube_ups_ble import config_flow
+from custom_components.wallecube_ups_ble.wclib.connection import UPS_SERVICE_UUID
+from custom_components.wallecube_ups_ble.wclib.devices.w150 import Device
+from custom_components.wallecube_ups_ble.wclib.exceptions import (
     SessionKeyError,
     UnsupportedBluetoothProtocol,
 )
@@ -54,7 +54,7 @@ def flow() -> config_flow.WalleCubeConfigFlow:
     flow = config_flow.WalleCubeConfigFlow()
     flow.hass = MagicMock()
     flow.flow_id = "flow"
-    flow.handler = "wallecube_ble"
+    flow.handler = "wallecube_ups_ble"
     flow.context = {"source": "bluetooth"}
     flow.async_set_unique_id = AsyncMock()
     flow._abort_if_unique_id_configured = MagicMock()

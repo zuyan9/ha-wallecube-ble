@@ -34,7 +34,7 @@ body:
     id: version
     attributes:
       label: Integration version
-      description: Find it in HACS or `custom_components/wallecube_ble/manifest.json`.
+      description: Find it in HACS or `custom_components/wallecube_ups_ble/manifest.json`.
       placeholder: "0.1.0"
     validations:
       required: true
